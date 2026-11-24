@@ -346,7 +346,9 @@ function render(origin) {
     renderedView=undefined;
     ui.settingsOrigin=null;
     ui.defaultTheme=false;
-    app.innerHTML=authView(helpers)+cloudStatusNotice();
+    app.innerHTML=cloudWorkspace?.getStatus()==='正在恢复登录…'
+      ? '<main class="auth" data-cloud-restoring><p role="status">正在恢复登录…</p></main>'
+      : authView(helpers)+cloudStatusNotice();
     return;
   }
   if(!ui.defaultTheme){
@@ -682,6 +684,7 @@ function cloudStatusNotice() {
  return cloudWorkspace?`<p class="notice" data-cloud-status role="status" ${message?'':'hidden'}>${esc(message)}</p>`:'';
 }
 window.addEventListener('workbench-cloud-status',()=>{
+ if(app.querySelector('[data-cloud-restoring]')&&cloudWorkspace.getStatus()!=='正在恢复登录…'){render();return;}
  const notice=app.querySelector('[data-cloud-status]');
  if(!notice)return;
  notice.textContent=cloudWorkspace.getStatus();
@@ -694,5 +697,5 @@ api.store.subscribe(next=>{
   render();
  });
 });
-render();
 void cloudWorkspace?.start();
+render();

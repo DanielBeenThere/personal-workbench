@@ -22,13 +22,18 @@ export function createCloudData(fetcher = globalThis.fetch) {
     return data;
   }
   const workspaceQuery = (userId) => `${workspacePath}?user_id=eq.${encodeURIComponent(userId)}&select=revision,snapshot,last_write_id`;
+  async function authToken(grantType, body) {
+    const session = await request(`/auth/v1/token?grant_type=${grantType}`, { method: "POST", body });
+    session.expires_at ??= Math.floor(Date.now() / 1000) + session.expires_in;
+    return session;
+  }
 
   return {
     signIn(email, password) {
-      return request("/auth/v1/token?grant_type=password", { method: "POST", body: { email, password } });
+      return authToken("password", { email, password });
     },
     refresh(refreshToken) {
-      return request("/auth/v1/token?grant_type=refresh_token", { method: "POST", body: { refresh_token: refreshToken } });
+      return authToken("refresh_token", { refresh_token: refreshToken });
     },
     signOut(token) {
       return request("/auth/v1/logout?scope=local", { method: "POST", token });

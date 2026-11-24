@@ -12,6 +12,7 @@ export function authView(h) {
  <form data-form="auth" class="editor">
  ${field('邮箱账号','email',ui.authEmail||'','email','required autocomplete="username"')}
  ${field('密码','password','','password','required autocomplete="current-password"')}
+ <label class="switch-row"><span>保持登录 30 天</span><input type="checkbox" name="keepSignedIn" ${ui.keepSignedIn!==false?'checked':''}></label>
  ${ui.authMessage?`<p class="notice" role="status">${esc(ui.authMessage)}</p>`:''}
  ${primary('登录')}
  </form></main>`;
@@ -145,9 +146,10 @@ export async function settingsAction(action,h,event) {
     if(submit?.disabled)return;
     if(submit)submit.disabled=true;
     ui.authEmail=values.email;
+    if(cloudWorkspace)ui.keepSignedIn=values.keepSignedIn==='on';
     if(ui.authMode==='reset'){await auth.reset({email:values.email});ui.authMessage='已提交找回密码请求（本地演示，不发送邮件）。';render();return;}
     try{
-     const controls={email:values.email,password:values.password,captchaId:values.captcha?ui.captchaId:undefined,captchaAnswer:values.captcha};
+     const controls={email:values.email,password:values.password,keepSignedIn:ui.keepSignedIn,captchaId:values.captcha?ui.captchaId:undefined,captchaAnswer:values.captcha};
      if(ui.authMode==='register')await auth.register({...controls,displayName:values.nickname});
      else await auth.login(controls);
      ui.authMessage='';ui.authChallenge=false;render();

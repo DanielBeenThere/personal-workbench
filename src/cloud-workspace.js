@@ -3,12 +3,16 @@ import { createCloudData } from "./cloud-data.js";
 export const cloudMode = Boolean(globalThis.document?.querySelector('meta[name="workbench-cloud"]')) ||
   new URLSearchParams(globalThis.location?.search).get("cloud") === "1";
 
+const rememberFor = 30 * 24 * 60 * 60 * 1000;
+
 export function createCloudWorkspace(initialState, data = createCloudData()) {
   const blank = structuredClone(initialState);
   for (const key of ["groups", "themes", "tasks", "ideas", "completions", "agentClaims"]) blank[key] = [];
   const listeners = new Set();
   const sessionKey = "personal-workbench:supabase-session";
+  const rememberedKey = sessionKey + ":remembered";
   let session;
+  let rememberUntil;
   let identity;
   let state = blank;
   let remoteRevision = 0;
@@ -31,22 +35,81 @@ export function createCloudWorkspace(initialState, data = createCloudData()) {
     globalThis.dispatchEvent?.(new Event("workbench-cloud-status"));
   }
 
+  function readRemembered() {
+    try {
+      return JSON.parse(globalThis.localStorage?.getItem(rememberedKey) || "null");
+    } catch {
+      return null;
+    }
+  }
+
   function remember(next) {
     session = next;
-    if (next) globalThis.sessionStorage?.setItem(sessionKey, JSON.stringify(next));
-    else globalThis.sessionStorage?.removeItem(sessionKey);
+    if (next && rememberUntil) {
+      globalThis.localStorage?.setItem(rememberedKey, JSON.stringify({ session: next, expiresAt: rememberUntil }));
+      globalThis.sessionStorage?.removeItem(sessionKey);
+    } else if (next) {
+      globalThis.sessionStorage?.setItem(sessionKey, JSON.stringify(next));
+    } else {
+      globalThis.sessionStorage?.removeItem(sessionKey);
+    }
+  }
+
+  function endSession(message = "") {
+    if (rememberUntil && readRemembered()?.expiresAt === rememberUntil) globalThis.localStorage?.removeItem(rememberedKey);
+    rememberUntil = null;
+    remember(null);
+    identity = null;
+    pending = null;
+    inFlight = null;
+    conflict = false;
+    state = { ...blank, revision: state.revision + 1 };
+    setStatus(message);
+    notify();
+  }
+
+  function syncRemembered() {
+    if (!rememberUntil) return;
+    const latest = readRemembered();
+    if (!latest || latest.expiresAt !== rememberUntil || latest.expiresAt <= Date.now()) {
+      if (hasChanges()) throw new Error("登录已过期。请先导出本页未同步的改动，再重新登录。");
+      endSession("请重新登录工作台。");
+      throw new Error("请重新登录工作台。");
+    }
+    session = latest.session;
+  }
+
+  function rememberExpired() {
+    return rememberUntil && (rememberUntil <= Date.now() || readRemembered()?.expiresAt !== rememberUntil);
+  }
+
+  async function renew() {
+    syncRemembered();
+    if (!session) throw new Error("请先登录工作台。");
+    if (session.expires_at * 1000 > Date.now() + 60000) return session.access_token;
+    const previous = session;
+    const previousDeadline = rememberUntil;
+    try {
+      const next = await data.refresh(previous.refresh_token);
+      if (session?.refresh_token !== previous.refresh_token || rememberUntil !== previousDeadline ||
+          (previousDeadline && readRemembered()?.expiresAt !== previousDeadline)) {
+        throw new Error("登录状态已变化，请重试。");
+      }
+      remember(next);
+      return next.access_token;
+    } catch (error) {
+      if (error.status === 400 || error.status === 401 || error.status === 403) {
+        if (!hasChanges()) endSession("登录会话已失效，请重新登录。");
+      }
+      throw error;
+    }
   }
 
   async function token() {
-    if (!session) throw new Error("请先登录工作台。");
-    if (session.expires_at * 1000 > Date.now() + 60000) return session.access_token;
     if (!refreshing) {
-      const previous = session;
-      refreshing = data.refresh(previous.refresh_token).then(next => {
-        if (session !== previous) throw new Error("登录状态已变化，请重试。");
-        remember(next);
-        return next.access_token;
-      }).finally(() => { refreshing = null; });
+      const locks = globalThis.navigator?.locks;
+      refreshing = (rememberUntil && locks ? locks.request(rememberedKey, renew) : renew())
+        .finally(() => { refreshing = null; });
     }
     return refreshing;
   }
@@ -59,7 +122,7 @@ export function createCloudWorkspace(initialState, data = createCloudData()) {
   }
 
   async function activate(next) {
-    remember(next);
+    session = next;
     const user = next.user;
     const accessToken = await token();
     let row = await data.load(user.id, accessToken);
@@ -104,7 +167,9 @@ export function createCloudWorkspace(initialState, data = createCloudData()) {
       }
       setStatus("");
     } catch {
-      setStatus("改动暂未同步，请保持本页打开，恢复连接后会重试。");
+      if (identity === user) setStatus(rememberExpired()
+        ? "登录已过期。请先导出本页未同步的改动，再重新登录。"
+        : "改动暂未同步，请保持本页打开，恢复连接后会重试。");
     } finally {
       writing = false;
     }
@@ -148,30 +213,38 @@ export function createCloudWorkspace(initialState, data = createCloudData()) {
       },
     },
     auth: {
-      async login({ email, password }) {
+      async login({ email, password, keepSignedIn = false }) {
         try {
           await activate(await data.signIn(email.trim(), password));
+          rememberUntil = keepSignedIn ? Date.now() + rememberFor : null;
+          remember(session);
         } catch (error) {
-          remember(null);
+          endSession();
           if (error.code === "invalid_credentials") throw new Error("邮箱或密码不正确。");
           throw error;
         }
       },
       async logout() {
         if (hasChanges() || writing) throw new Error("还有改动未同步，请等待同步或先导出备份再刷新。");
-        await data.signOut(await token());
-        remember(null);
-        identity = null;
-        state = { ...blank, revision: state.revision + 1 };
-        setStatus("");
-        notify();
+        try { await data.signOut(await token()); }
+        finally { endSession(); }
       },
     },
     async start() {
       try {
         const stored = JSON.parse(globalThis.sessionStorage?.getItem(sessionKey) || "null");
+        const remembered = readRemembered();
         if (stored) await activate(stored);
+        else if (remembered?.expiresAt > Date.now()) {
+          rememberUntil = remembered.expiresAt;
+          setStatus("正在恢复登录…");
+          await activate(remembered.session);
+          setStatus("");
+        } else if (remembered) {
+          globalThis.localStorage?.removeItem(rememberedKey);
+        }
       } catch {
+        rememberUntil = null;
         remember(null);
         setStatus("暂未恢复登录，请重新登录。");
       }
