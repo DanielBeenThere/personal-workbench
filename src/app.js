@@ -28,6 +28,7 @@ const prettyDate = value => {const date = new Date(value);return isNaN(date.valu
 const safeURL = value => {try {const url = new URL(value); return ['http:','https:'].includes(url.protocol) ? esc(url.href) : '';} catch {return '';}};
 const sidebarButton = (extra='',label='切换侧栏') => button(icon('menu'),'sidebar',`icon-button sidebar-toggle ${extra}`,`aria-label="${label}"`);
 const toolbar = (title,back='') => `<header class="page-header"><div class="page-heading">${sidebarButton()}<h1>${title}</h1>${back?button('‹ '+back,'back','text-button page-back'):''}</div></header>`;
+const editConfirmation = action => `<footer class="edit-confirm">${button('确认',action,'primary full')}</footer>`;
 const empty = text=>`<p class="empty">${text}</p>`;
 const helpers = {ui,state,api,esc,button,primary,field,area,select,option,checkbox,avatar,toolbar,empty,safeURL,makeId,prettyDate};
 
@@ -75,7 +76,7 @@ function themeList() {
       return `<button class="topic-tile ${theme.priority?'priority':''} ${selected?'topic-selected':''}" data-action="${ui.editingThemes?'edit-theme':'open-theme'}" data-id="${esc(theme.id)}">${theme.priority?icon('star'):''}<span>${esc(theme.name)}</span>${trailing}</button>`;
     }).join('')}</div></section>`:'';
   }).join('')}
-  <div class="theme-footer">${ui.editingThemes?button('新建主题','edit-theme','soft'):`${button('未归类项目','open-theme','','data-id=""')}${button('已完成','navigate','mobile-only','data-value="done"')}`}</div></section>`;
+  <div class="theme-footer">${ui.editingThemes?button('新建主题','edit-theme','soft'):`${button('未归类项目','open-theme','','data-id=""')}${button('已完成','navigate','mobile-only','data-value="done"')}`}</div>${ui.editingThemes?editConfirmation('theme-mode'):''}</section>`;
 }
 
 const sorted = list => [...list].sort((a,b)=>(a.due||'9999-12-31').localeCompare(b.due||'9999-12-31'));
@@ -167,7 +168,7 @@ function themeForm(theme) {
 }
 
 function groupList() {
-  return `<div class="group-list">${state().groups.map(g=>`<div class="group-row" data-group="${esc(g.id)}"><strong>${esc(g.name)}</strong>${button('编辑','group-edit','',`data-id="${esc(g.id)}"`)}${button(icon('menu'),'group-move','icon-button',`data-id="${esc(g.id)}" draggable="true" aria-label="拖动分组，点击上移"`)}</div>`).join('')}${button('新建分组','group-edit','soft full')}</div>`;
+  return `<div class="group-list">${state().groups.map(g=>`<div class="group-row" data-group="${esc(g.id)}"><strong>${esc(g.name)}</strong>${button('编辑','group-edit','',`data-id="${esc(g.id)}"`)}${button(icon('menu'),'group-move','icon-button',`data-id="${esc(g.id)}" draggable="true" aria-label="拖动分组，点击上移"`)}</div>`).join('')}${button('新建分组','group-edit','soft full')}${editConfirmation('back')}</div>`;
 }
 
 function dialogHTML(d,underlay=false) {

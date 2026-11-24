@@ -395,6 +395,22 @@ input::placeholder,textarea::placeholder{color:var(--placeholder)}
  .tree-children{margin-top:13px}
 }
 @media(min-width:1024px){.sidebar{padding-bottom:25px}}
+.edit-confirm{margin-top:12px}
+.edit-confirm>.button.primary{min-height:46px;background:var(--strong-accent);border-color:var(--strong-accent)}
+.group-list:has(.edit-confirm){display:flex;flex-direction:column;width:100%}
+@media(max-width:1023px){
+ .page:has(.group-list>.edit-confirm),.page:has(.theme-layout:not(.show-tree) .edit-confirm){display:flex;flex-direction:column;min-height:100dvh}
+ .group-list:has(>.edit-confirm),.theme-layout:not(.show-tree):has(.edit-confirm){flex:1;padding-bottom:18px}
+ .theme-layout:not(.show-tree):has(.edit-confirm),.theme-layout:not(.show-tree) .theme-list:has(.edit-confirm){display:flex;flex-direction:column}
+ .theme-layout:not(.show-tree) .theme-list:has(.edit-confirm){flex:1}
+ .edit-confirm{margin-top:auto;padding-top:66px}
+ .workspace:has(.group-list>.edit-confirm,.theme-layout:not(.show-tree) .edit-confirm)>.assistant-launcher.button{bottom:calc(var(--bottom) + 76px)}
+}
+@media(min-width:1024px){
+ .page:has(.group-list>.edit-confirm){display:flex;flex-direction:column;min-height:calc(100dvh - 149px)}
+ .group-list:has(>.edit-confirm){flex:1}
+ .group-list>.edit-confirm{margin-top:auto;padding-top:20px}
+}
 .celebration-check{width:45px;height:45px;position:relative;z-index:1}
 .celebration-check path{fill:none;stroke:var(--primary-ink);stroke-width:3.6;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1;stroke-dashoffset:1;animation:draw-check .4s 65ms cubic-bezier(.36,0,.28,1) both}
 @keyframes draw-check{to{stroke-dashoffset:0}}
