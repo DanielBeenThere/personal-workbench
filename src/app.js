@@ -1,6 +1,6 @@
 import {api,cloudWorkspace,assignees as people} from './domain.js';
 import {dueReminders,markRemindersRead} from './task-reminders.js';
-import {authView, settingsView, ideaView, chatView, settingsAction, bindVoice, syncAssistantSession, closeAssistantChat} from './settings.js';
+import {authView, settingsView, ideaView, chatView, searchResults, settingsAction, bindVoice, syncAssistantSession, closeAssistantChat} from './settings.js';
 
 const app = document.querySelector('#app');
 const state = () => api.store.get();
@@ -30,6 +30,7 @@ const prettyDate = value => {const date = new Date(value);return isNaN(date.valu
 const safeURL = value => {try {const url = new URL(value); return ['http:','https:'].includes(url.protocol) ? esc(url.href) : '';} catch {return '';}};
 const sidebarButton = (extra='',label='切换侧栏') => button(icon('menu'),'sidebar',`icon-button sidebar-toggle ${extra}`,`aria-label="${label}"`);
 const toolbar = (title,back='') => `<header class="page-header"><div class="page-heading">${sidebarButton()}<h1>${title}</h1>${back?button('‹ '+back,'back','text-button page-back'):''}</div></header>`;
+const floatingBack = () => button('<span aria-hidden="true"></span>','back','floating-back','aria-label="返回上一级"');
 const editConfirmation = action => `<footer class="edit-confirm">${button('确认',action,'primary full')}</footer>`;
 const empty = text=>`<p class="empty">${text}</p>`;
 const helpers = {ui,state,api,esc,button,primary,field,area,select,option,checkbox,avatar,toolbar,empty,safeURL,makeId,prettyDate};
@@ -53,7 +54,8 @@ function sidebar() {
 }
 
 function taskItem(task,asPriority=false) {
-  const children=state().tasks.filter(item=>item.parentId===task.id&&item.status!=='已完成');
+  const children=task.parentId?[]:state().tasks.filter(item=>item.parentId===task.id);
+  const progress=children.length?Math.round(100*children.filter(item=>item.status==='已完成').length/children.length):null;
   const status=task.status==='等待中'?'waiting':task.status==='逾期'?'overdue':'';
   const summary=String(task.guidance?.summary??'').trim();
   const prompt=String(task.guidance?.prompt??'').trim();
@@ -61,7 +63,7 @@ function taskItem(task,asPriority=false) {
    <div class="task-copy"><h3>${!task.parentId&&!asPriority?button(icon('chevron'),'expand',`icon-button disclosure ${ui.expanded.has(task.id)?'expanded':''}`,`data-id="${esc(task.id)}" aria-expanded="${ui.expanded.has(task.id)}" aria-label="展开或折叠任务"`):''}${task.priority?icon('star'):''}${esc(task.title)}</h3>
    ${summary?`<p class="task-guidance-title">${esc(summary)}</p>`:''}
    ${prompt?`<p class="task-guidance-preview">${esc(prompt)}</p>`:''}
-   ${asPriority?'':`<p>${task.parentId?'二级任务 · ':''}<span class="${status}">${esc(task.status)}</span>${children.length?' · 由下属任务自动汇总':''}${task.due?' · '+esc(task.due):''}</p>`}</div>
+   ${asPriority?'':`<p>${task.parentId?'二级任务 · ':''}<span class="${status}">${esc(task.status)}</span>${progress===null?'':' · 完成进度 '+progress+'%'}${task.due?' · '+esc(task.due):''}</p>`}</div>
    ${button(asPriority?'查看任务':'编辑','edit-task',task.priority?'soft':'',`data-id="${esc(task.id)}"`)}
   </article>`;
 }
@@ -189,12 +191,11 @@ function dialogHTML(d,underlay=false) {
   }
   if(d.kind==='celebration'){content=`<div class="celebration-stage"><div class="celebration-badge" aria-hidden="true"><svg viewBox="0 0 40 40" class="celebration-check"><path pathLength="1" d="M 9,20 L 17,28 L 31,13"></path></svg><i></i>${Array.from({length:8},(_,i)=>`<b style="--index:${i}">✦</b>`).join('')}</div></div><h2 id="dialog-heading" class="celebration-heading">${d.isTheme?'战略主题已完成':'任务已完成'}</h2><p class="completion-title">${esc(d.label)}</p><div class="celebration-actions">${button('返回任务列表','celebration-return','primary full')}${button('查看已完成任务','celebration-done','full')}</div>`;}
   if(d.kind==='model-key'){title='配置 API Key';content=`<form class="editor" data-form="model-key">${field('API Key','key','','password','required autocomplete="off"')}<footer class="form-footer">${button('取消','close-dialog')}${primary('确认')}</footer></form>`;}
-  const mobileBack=extra?button('‹ '+(d.parent?'编辑任务':ui.page==='done'?completedPageLabel:'返回主题'),'close-dialog','text-button page-back task-mobile-tool'):'';
   const variant=d.kind==='celebration'?' celebration-dialog':d.completing||converting?' completion-confirm':'';
   const closeButton=d.completing||converting?'':'<button type="button" data-action="close-dialog" class="button icon-button close" aria-label="关闭">×</button>';
   const heading=title?`<h2 ${underlay?'':'id="dialog-heading"'}>${title}</h2>`:'';
-  const head=title?`<header>${closeButton}${extra?`<div class="page-heading">${sidebarButton('task-mobile-tool')}${heading}${mobileBack}</div>`:heading}</header>`:'';
-  return `<div class="modal-layer ${extra}${variant}${underlay?' dialog-underlay':''}" ${underlay?'inert aria-hidden="true"':'data-action="dismiss-overlay"'}><article class="dialog" ${underlay?'':'tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="dialog-heading"'}>${head}<div class="dialog-body">${content||''}</div>${extra?`<div class="task-mobile-nav">${navBar(true)}</div>`:''}</article></div>`;
+  const head=title?`<header>${closeButton}${extra?`<div class="page-heading">${sidebarButton('task-mobile-tool')}${heading}</div>`:heading}</header>`:'';
+  return `<div class="modal-layer ${extra}${variant}${underlay?' dialog-underlay':''}" ${underlay?'inert aria-hidden="true"':'data-action="dismiss-overlay"'}><article class="dialog" ${underlay?'':'tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="dialog-heading"'}>${head}<div class="dialog-body">${content||''}</div>${extra?`<div class="task-mobile-nav">${navBar(true)}</div>`:''}${underlay?'':floatingBack()}</article></div>`;
 }
 function completionGroups(dialog) {
  const affected=dialog.affected||[];
@@ -369,24 +370,29 @@ function render(origin) {
   const section=ui.section;
   const settingsMode=Boolean(section&&section!=='groups');
   const background=ui.dialog?.completing?ui.dialog.parent:ui.dialog?.background;
+  const showBack=!ui.dialog&&(section||ui.page==='done'||(ui.page==='ideas'&&ui.idea)||(ui.page==='themes'&&(ui.mobileTree||ui.editingThemes)));
   const body=section==='groups'?`${toolbar('编辑分组','战略主题')}${groupList()}` : section ? settingsView(helpers) :
     ui.page==='themes'?themes() : ui.page==='ideas'?ideaView(helpers) : ui.page==='done'?history():today();
   app.innerHTML=`<div class="workspace ${ui.collapsed?'collapsed':''}">${sidebar()}<main><header class="desktop-header">${sidebarButton('',ui.collapsed?'展开侧栏':'收起侧栏')}`+
     `<strong>待办清单</strong>${navBar()}</header><div class="page"${settingsMode?' data-secondary':''}>${cloudStatusNotice()}${body}</div>${settingsMode?'':`<div class="mobile-nav">${navBar(true)}</div>`}</main>
   ${button(avatar(data.settings.assistant.avatar)+`<span class="assistant-unread" aria-hidden="true" ${dueReminders(data).some(item=>item.unread)?'':'hidden'}></span>`,'chat-toggle','assistant-launcher',`aria-label="小助手" aria-description="${dueReminders(data).some(item=>item.unread)?'有未读任务提醒':''}" aria-haspopup="dialog" aria-expanded="${Boolean(ui.chat)}" ${ui.chat?'aria-controls="assistant-dialog"':''}`)}${ui.chat?chatView(helpers):''}${dialogHTML(background,true)}${dialogHTML(ui.dialog)}
-  ${ui.toast?`<div class="toast" role="status">${esc(ui.toast)}</div>`:''}</div>`;
+  ${showBack?floatingBack():''}${ui.toast?`<div class="toast" role="status">${esc(ui.toast)}</div>`:''}</div>`;
   if(origin?.page)app.querySelector('.page').replaceWith(origin.page);
   if(origin?.dialogLayer)app.querySelector('.modal-layer:not([inert])').replaceWith(origin.dialogLayer);
   if(ui.launcher) Object.assign(app.querySelector('.assistant-launcher').style,{...ui.launcher,bottom:'auto'});
   markConnection();
   alignOverlay();
-  const chatScroll=app.querySelector('.chat-scroll');
+  const chatScroll=app.querySelector('.chat:not([inert]) .chat-scroll');
   const chatInput=app.querySelector('.chat-input');
   if(chatInput?.value)resizeChatInput(chatInput);
   if(chatScroll){
-    const newMessage=chatScroll.dataset.messageCount!==previousScroll?.dataset.messageCount;
-    chatScroll.scrollTop=following||newMessage?chatScroll.scrollHeight:scrollPosition;
-    if(newMessage)requestAnimationFrame(()=>{if(chatScroll.isConnected)chatScroll.scrollTop=chatScroll.scrollHeight;});
+    const request=ui.chat?.scrollRequest;
+    if(ui.chat)ui.chat.scrollRequest=null;
+    const anchor=request?.key&&[...chatScroll.querySelectorAll('[data-message-key]')].find(node=>node.dataset.messageKey===request.key);
+    if(anchor){
+      const offset=request.center?(chatScroll.clientHeight-anchor.offsetHeight)/2:request.offset;
+      chatScroll.scrollTop+=anchor.getBoundingClientRect().top-chatScroll.getBoundingClientRect().top-offset;
+    }else chatScroll.scrollTop=request?.top??(following||request?.latest?chatScroll.scrollHeight:scrollPosition);
   }
   const nextView=viewKey();
   const viewChanged=nextView!==renderedView;
@@ -446,7 +452,13 @@ function notify(message) {
   clearTimeout(notify.timer);
   notify.timer=setTimeout(()=>{ui.toast=''; app.querySelector('.toast')?.remove();},2800);
 }
-const navigate = value => {ui.page=value;ui.section='';ui.mobileTree=false;ui.dialog=null;ui.sidebar=false;ui.settingsOrigin=null;render();};
+function navigate(value) {
+ if(value==='done'&&ui.page!=='done'){
+  ui.completedOrigin={page:ui.page,themeId:ui.themeId,mobileTree:ui.mobileTree,editingThemes:ui.editingThemes};
+ }else if(value!=='done')ui.completedOrigin=null;
+ Object.assign(ui,{page:value,section:'',mobileTree:false,editingThemes:false,dialog:null,sidebar:false,settingsOrigin:null});
+ render();
+}
 function openSettings(){
   if(!ui.section||ui.section==='groups'){
     const page=app.querySelector('.page');
@@ -475,6 +487,22 @@ const openTask = (id,parent=null,idea=null) => {
  render();
 };
 const close = () => {ui.dialog=ui.dialog?.parent||null;render();};
+function goBack() {
+ if(ui.sidebar){toggleMobileSidebar();return;}
+ if(ui.dialog){
+  if(ui.dialog.kind==='celebration')ui.dialog=ui.dialog.background?.parent||null;
+  else {close();return;}
+ }else if(ui.section==='settings'){returnFromSettings();return;}
+ else if(ui.section){
+  ui.section=ui.section==='assistant-avatars'?'personalization':['nickname','password','avatar','model','personalization'].includes(ui.section)?'settings':'';
+ }else if(ui.page==='ideas')ui.idea=null;
+ else if(ui.page==='done'){
+  Object.assign(ui,ui.completedOrigin||{page:'themes',mobileTree:false});
+  ui.completedOrigin=null;
+ }else if(ui.editingThemes)ui.editingThemes=false;
+ else if(ui.mobileTree)ui.mobileTree=false;
+ render();
+}
 const complete=(item)=>{const background=ui.dialog?.completing?ui.dialog.parent:ui.dialog;ui.dialog={kind:'celebration',label:item.title||item.name,isTheme:background?.kind==='theme',background};render();};
 const confirmation=(title,description,run,parent=ui.dialog,affected=[],completing=false)=>{ui.dialog={kind:'confirm',title,description,run,parent,affected,completing};render();};
 
@@ -551,7 +579,7 @@ app.addEventListener('click',async event=>{
    return;
   }
   if(action==='settings'){openSettings();return;}
-  if(action==='back'){if(ui.section==='settings'){returnFromSettings();return;}if(ui.section){ui.section=ui.section==='assistant-avatars'?'personalization':['nickname','password','avatar','model','personalization'].includes(ui.section)?'settings':'';}else if(ui.page==='ideas')ui.idea=null;else if(ui.page==='done'){ui.page='themes';ui.mobileTree=false;}else if(ui.mobileTree)ui.mobileTree=false; render();return;}
+  if(action==='back'){goBack();return;}
   if(action==='open-theme'){ui.themeId=id||null;ui.mobileTree=true;const first=state().tasks.find(t=>!t.parentId&&(t.themeId||null)===ui.themeId);if(first)ui.expanded.add(first.id);render();return;}
   if(action==='expand'){ui.expanded.has(id)?ui.expanded.delete(id):ui.expanded.add(id);render();return;}
   if(action==='edit-task'){openTask(id);return;}
@@ -583,7 +611,8 @@ app.addEventListener('click',async event=>{
   if(action==='reference'){app.querySelector('#references').insertAdjacentHTML('beforeend',referenceRow());app.querySelector('#references .reference-row:last-child input')?.focus();return;}
   if(action==='reference-choose'){target.closest('.reference-row').querySelector('input[type=file]').click();return;}
   if(action==='reference-remove'){target.closest('.reference-row').remove();return;}
-  if(action==='celebration-return'||action==='celebration-done'){navigate(action==='celebration-return'?'themes':'done');return;}
+  if(action==='celebration-return'){goBack();return;}
+  if(action==='celebration-done'){navigate('done');return;}
   await settingsAction(action,helpers,event);
  }catch(error){notify(error.message);}
 });
@@ -626,7 +655,17 @@ app.addEventListener('change',async event=>{
 });
 app.addEventListener('input',event=>{
  if(event.target.matches('.chat-input')){resizeChatInput(event.target);ui.chat.draft=event.target.value;}
+ if(event.target.matches('.chat-search-input')&&ui.chat?.searchOpen){
+  ui.chat.searchQuery=event.target.value;
+  app.querySelector('.chat-search-results').innerHTML=searchResults(helpers,ui.chat.searchQuery);
+ }
 });
+app.addEventListener('scroll',event=>{
+ const target=event.target;
+ if(target.matches?.('.chat:not([inert]) .chat-scroll[data-has-older]')&&target.scrollTop<=4&&target.scrollHeight>target.clientHeight){
+  settingsAction('chat-older',helpers,event).catch(error=>notify(error.message));
+ }
+},true);
 app.addEventListener('keydown',event=>{
  const input=event.target;
  if(event.key!=='Enter'||!input.matches('.chat-input')||event.isComposing||event.keyCode===229)return;

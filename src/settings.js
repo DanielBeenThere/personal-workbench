@@ -124,13 +124,24 @@ export function ideaView(h) {
 
 export function chatView(h) {
  const {ui,state,button,avatar,esc,primary,safeURL}=h;
- const {trial,messages,pending,draft,progress}=ui.chat;
+ const {trial,messages,pending,draft,progress,searchOpen,searchQuery,limit}=ui.chat;
  const current=state();
  const settings=trial?ui.assistantDraft:current.settings.assistant;
- const visibleMessages=trial?messages:[...messages,...dueReminders(current).map(item=>({...item,role:'assistant'}))]
+ const timeline=trial?messages:chatTimeline();
+ const older=!trial&&timeline.length>limit;
+ const visibleMessages=trial?messages:[...timeline.slice(-limit),...dueReminders(current).map(item=>({...item,role:'assistant'}))]
   .sort((a,b)=>(a.at||0)-(b.at||0));
- return `<div class="chat-scrim" data-action="chat-close"></div><section class="chat" id="assistant-dialog" tabindex="-1" role="dialog" aria-labelledby="chat-heading"><header><div class="chat-title">${avatar(settings.avatar)}<div><strong id="chat-heading">${esc(settings.name||'小助手')}</strong>${trial?'<small>试聊 · 使用当前设置</small>':''}</div></div><div class="button-row">${messages.length&&!pending?button('新对话','chat-reset'):''}${button('×','chat-close','icon-button','aria-label="关闭对话"')}</div></header>
- <div class="chat-scroll" role="log" data-message-count="${visibleMessages.length}">${visibleMessages.map(item=>`<div class="message ${item.role==='user'?'outgoing':'incoming'}">${item.role==='user'?'':avatar(settings.avatar)}<div>${esc(item.text)}${item.sources?.length?`<ul class="message-sources">${item.sources.map(source=>{const url=safeURL(source.url);return url?`<li><a href="${url}" target="_blank" rel="noopener noreferrer">${esc(source.title||source.name||'来源')}</a></li>`:'';}).join('')}</ul>`:''}</div></div>`).join('')}
+ const controls=trial?(messages.length&&!pending?button('新对话','chat-reset'):''):
+  button('<span class="chat-search-icon" aria-hidden="true"></span> 搜索历史对话','chat-search','',pending?'disabled':'');
+ const closeButton=button('×','chat-close','icon-button','aria-label="关闭对话"');
+ const panel='<div class="chat-scrim" data-action="chat-close"></div><section class="chat" id="assistant-dialog" tabindex="-1" role="dialog" aria-labelledby="chat-heading">';
+ if(searchOpen){
+  return `${panel}<header>${button('‹ 返回对话','chat-search-back','text-button')}<strong id="chat-heading">搜索历史对话</strong><div class="chat-actions">${closeButton}</div></header>
+  <section class="chat-history" aria-label="搜索历史对话"><div class="chat-search-field"><span class="chat-search-icon" aria-hidden="true"></span><input type="search" class="chat-search-input" value="${esc(searchQuery||'')}" aria-label="搜索历史消息" placeholder="输入关键词"></div><div class="chat-search-results">${searchResults(h,searchQuery||'')}</div></section></section>`;
+ }
+ const header=`${panel}<header><div class="chat-title">${avatar(settings.avatar)}<div><strong id="chat-heading">${esc(settings.name||'小助手')}</strong>${trial?'<small>试聊 · 使用当前设置</small>':''}</div></div><div class="chat-actions">${controls}${closeButton}</div></header>`;
+ return `${header}
+ <div class="chat-scroll" role="log" ${older?'data-has-older':''}>${older?button('↑ 上滑查看更早消息','chat-older','text-button chat-older'):''}${visibleMessages.map((item,index)=>`${trial?'':chatDateLabel(item,visibleMessages[index-1])}<div class="message ${item.role==='user'?'outgoing':'incoming'}" ${item.messageKey?`data-message-key="${esc(item.messageKey)}" ${item.messageKey===ui.chat.highlighted?'data-highlighted':''}`:''}>${item.role==='user'?'':avatar(settings.avatar)}<div>${esc(item.text)}${item.sources?.length?`<ul class="message-sources">${item.sources.map(source=>{const url=safeURL(source.url);return url?`<li><a href="${url}" target="_blank" rel="noopener noreferrer">${esc(source.title||source.name||'来源')}</a></li>`:'';}).join('')}</ul>`:''}</div></div>`).join('')}
  ${pending&&!ui.chat.pendingChange?`<div class="message incoming">${avatar(settings.avatar)}<div>${esc(progress||'正在思考')} <span class="typing">● ● ●</span></div></div>`:''}
  ${ui.chat.pendingChange?`<section class="guidance" aria-label="待确认的工作台操作"><p>${esc(ui.chat.pendingChange.description)}</p><div class="button-row">${button('取消操作','assistant-cancel')}${button('确认操作','assistant-confirm','primary')}</div></section>`:''}</div>
  <form data-form="chat"><textarea class="chat-input" name="message" rows="1" enterkeyhint="send" placeholder="输入消息" aria-label="输入消息">${esc(draft||'')}</textarea>${primary('发送')}</form></section>`;
@@ -148,9 +159,60 @@ function saveIdeaDraft(ui) {
  if(form)Object.assign(ui.idea,{title:form.elements.title.value,body:form.elements.body.value});
 }
 const textTitle=body=>body.trim().split(/[\r\n。！？]/)[0].slice(0,24);
-const newChat=(trial=false)=>({trial,messages:[],transcript:[],draft:''});
+const chatPageSize=10;
+const newChat=(trial=false)=>({id:crypto.randomUUID(),trial,messages:[],transcript:[],draft:'',limit:chatPageSize});
 let retainedChat=newChat();
 let assistantOwner=null;
+let sessionChatHistory=[];
+const chatHistoryKey=()=>`personal-workbench:chat-history:${cloudWorkspace?'cloud':'local'}:${assistantOwner}`;
+function chatHistory() {
+ if(!assistantOwner)return [];
+ try{
+  const stored=JSON.parse(localStorage.getItem(chatHistoryKey())||'[]');
+  if(Array.isArray(stored)){
+   const known=new Map();
+   for(const chat of [...stored,...sessionChatHistory]){
+    if(!known.has(chat.id)||chat.updatedAt>=known.get(chat.id).updatedAt)known.set(chat.id,chat);
+   }
+   return [...known.values()].sort((a,b)=>b.updatedAt-a.updatedAt);
+  }
+ }catch{}
+ return sessionChatHistory;
+}
+function chatTimeline() {
+ return chatHistory().slice().reverse().flatMap(chat=>chat.messages.map((message,index)=>({...message,messageKey:chat.id+':'+index})))
+  .sort((a,b)=>(a.at||0)-(b.at||0));
+}
+function chatDateLabel(message,previous) {
+ if(!Number.isFinite(message.at))return '';
+ const date=new Date(message.at);
+ const day=date.toDateString();
+ if(day===new Date(previous?.at).toDateString())return '';
+ const label=day===new Date().toDateString()?'今天':date.toLocaleDateString('zh-CN');
+ return `<time class="chat-date" datetime="${date.toISOString()}">${label} ${date.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}</time>`;
+}
+export function searchResults({button,esc}, query) {
+ const term=query.trim().toLowerCase();
+ if(!term)return '<p class="empty">输入关键词查找历史消息。</p>';
+ const matches=chatTimeline().reverse().flatMap(message=>{
+  const index=message.text.toLowerCase().indexOf(term);
+  return index<0?[]:[{message,index}];
+ });
+ if(!matches.length)return '<p class="empty">没有找到匹配的消息。</p>';
+ return `<p class="chat-result-count" role="status">${matches.length} 条结果</p>`+matches.map(({message,index})=>{
+  const text=message.text,start=Math.max(0,index-28),end=index+term.length,stop=Math.min(text.length,end+58);
+  const snippet=(start?'…':'')+esc(text.slice(start,index))+'<mark>'+esc(text.slice(index,end))+'</mark>'+esc(text.slice(end,stop))+(stop<text.length?'…':'');
+  const date=new Date(message.at).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  return button(`<span><small>${esc(date)} · ${message.role==='user'?'你':'小助手'}</small><span>${snippet}</span></span><b aria-hidden="true">›</b>`,'chat-jump','chat-history-item',`data-id="${esc(message.messageKey)}"`);
+ }).join('');
+}
+function rememberChat(chat) {
+ if(chat.trial||!assistantOwner)return true;
+ const entry={id:chat.id,messages:structuredClone(chat.messages),updatedAt:Date.now()};
+ sessionChatHistory=[entry,...chatHistory().filter(item=>item.id!==entry.id)];
+ try{localStorage.setItem(chatHistoryKey(),JSON.stringify(sessionChatHistory));return true;}
+ catch{return false;}
+}
 function cancelPendingChange(chat) {
  if(!chat?.pendingChange)return;
  chat.pendingChange.resolve({ok:false,canceled:true});
@@ -158,12 +220,14 @@ function cancelPendingChange(chat) {
 }
 export function closeAssistantChat(ui) {
  if(ui.chat?.trial)cancelPendingChange(ui.chat);
+ if(ui.chat)Object.assign(ui.chat,{searchOpen:false,searchQuery:'',highlighted:null,limit:chatPageSize,scrollRequest:null});
  ui.chat=null;
 }
 export function syncAssistantSession(ui, state) {
  const owner=state.session?(cloudWorkspace?cloudWorkspace.getAccountId():state.account.email):null;
  if(owner===assistantOwner)return false;
  assistantOwner=owner;
+ sessionChatHistory=[];
  cancelPendingChange(ui.chat);
  cancelPendingChange(retainedChat);
  retainedChat=newChat();
@@ -309,8 +373,46 @@ export async function settingsAction(action,h,event) {
     ui.chat=newChat(ui.chat.trial);
     if(!ui.chat.trial)retainedChat=ui.chat;
     render();
+    document.querySelector('.chat-input')?.focus();
    }
    return;
+  case 'chat-search':
+   if(!ui.chat||ui.chat.trial||ui.chat.pending)return;
+   ui.chat.searchPosition=document.querySelector('.chat:not([inert]) .chat-scroll')?.scrollTop;
+   ui.chat.searchOpen=true;
+   render();
+   document.querySelector('.chat-search-input')?.focus();
+   return;
+  case 'chat-search-back':
+   if(!ui.chat?.searchOpen)return;
+   ui.chat.searchOpen=false;
+   ui.chat.scrollRequest={top:ui.chat.searchPosition};
+   render();
+   document.querySelector('.chat [data-action="chat-search"]')?.focus({preventScroll:true});
+   return;
+  case 'chat-jump':{
+   if(!ui.chat?.searchOpen)return;
+   const timeline=chatTimeline();
+   const index=timeline.findIndex(message=>message.messageKey===id);
+   if(index<0)return;
+   ui.chat.limit=Math.max(ui.chat.limit,timeline.length-index);
+   ui.chat.searchOpen=false;
+   ui.chat.highlighted=id;
+   ui.chat.scrollRequest={key:id,center:true};
+   render();
+   document.querySelector('.chat:not([inert])')?.focus({preventScroll:true});
+   return;
+  }
+  case 'chat-older':{
+   const scroll=document.querySelector('.chat:not([inert]) .chat-scroll[data-has-older]');
+   if(!scroll||!ui.chat)return;
+   const oldest=scroll.querySelector('[data-message-key]');
+   if(!oldest)return;
+   ui.chat.scrollRequest={key:oldest.dataset.messageKey,offset:oldest.getBoundingClientRect().top-scroll.getBoundingClientRect().top};
+   ui.chat.limit+=chatPageSize;
+   render();
+   return;
+  }
   case 'assistant-cancel':
   case 'assistant-confirm':{
    const chat=ui.chat;
@@ -343,14 +445,22 @@ export async function settingsAction(action,h,event) {
 }
 
 async function sendChat(h,text) {
- const {ui,state,render}=h, chat=ui.chat;
+ const {ui,state,render,notify}=h, chat=ui.chat;
  const value=String(text??'');
  if(!chat||chat.pending||!value.trim())return;
  const owner=assistantOwner;
  const isCurrent=()=>owner===assistantOwner&&state().session&&(chat.trial?ui.chat===chat:retainedChat===chat);
+ if(!chat.trial){
+  chat.transcript=chatTimeline().filter(message=>!message.error).slice(-20).map(({role,text})=>({role,content:text}));
+  chat.limit=chatPageSize;
+  chat.highlighted=null;
+  chat.scrollRequest={latest:true};
+ }
  chat.messages.push({role:'user',text:value,at:Date.now()});
  chat.draft='';
+ chat.searchOpen=false;
  chat.pending=true;
+ rememberChat(chat);
  render();
  try{
   const {settings,account}=state();
@@ -377,8 +487,9 @@ async function sendChat(h,text) {
  }catch(error){if(isCurrent())chat.messages.push({role:'assistant',text:error.message,error:true,at:Date.now()});}
  chat.pending=false;
  chat.progress='';
+ const saved=!isCurrent()||rememberChat(chat);
  if(ui.chat===chat){
-  render();
+  if(saved)render();else notify('浏览器存储不可用，本次对话仅在当前页面保留。');
   const reply=chat.messages.at(-1);
   if(reply?.role==='assistant')document.querySelector('#assistant-announcement').textContent=reply.text;
  }
