@@ -1,4 +1,5 @@
 import {api,cloudWorkspace,assignees as people} from './domain.js';
+import {dueReminders,markRemindersRead} from './task-reminders.js';
 import {authView, settingsView, ideaView, chatView, settingsAction, bindVoice} from './settings.js';
 
 const app = document.querySelector('#app');
@@ -371,7 +372,7 @@ function render(origin) {
     ui.page==='themes'?themes() : ui.page==='ideas'?ideaView(helpers) : ui.page==='done'?history():today();
   app.innerHTML=`<div class="workspace ${ui.collapsed?'collapsed':''}">${sidebar()}<main><header class="desktop-header">${sidebarButton('',ui.collapsed?'展开侧栏':'收起侧栏')}`+
     `<strong>待办清单</strong>${navBar()}</header><div class="page"${settingsMode?' data-secondary':''}>${cloudStatusNotice()}${body}</div>${settingsMode?'':`<div class="mobile-nav">${navBar(true)}</div>`}</main>
-  ${button(avatar(data.settings.assistant.avatar),'chat-toggle','assistant-launcher',`aria-label="小助手" aria-haspopup="dialog" aria-expanded="${Boolean(ui.chat)}" ${ui.chat?'aria-controls="assistant-dialog"':''}`)}${ui.chat?chatView(helpers):''}${dialogHTML(background,true)}${dialogHTML(ui.dialog)}
+  ${button(avatar(data.settings.assistant.avatar)+`<span class="assistant-unread" aria-hidden="true" ${dueReminders(data).some(item=>item.unread)?'':'hidden'}></span>`,'chat-toggle','assistant-launcher',`aria-label="小助手" aria-description="${dueReminders(data).some(item=>item.unread)?'有未读任务提醒':''}" aria-haspopup="dialog" aria-expanded="${Boolean(ui.chat)}" ${ui.chat?'aria-controls="assistant-dialog"':''}`)}${ui.chat?chatView(helpers):''}${dialogHTML(background,true)}${dialogHTML(ui.dialog)}
   ${ui.toast?`<div class="toast" role="status">${esc(ui.toast)}</div>`:''}</div>`;
   if(origin?.page)app.querySelector('.page').replaceWith(origin.page);
   if(origin?.dialogLayer)app.querySelector('.modal-layer:not([inert])').replaceWith(origin.dialogLayer);
@@ -703,3 +704,15 @@ api.store.subscribe(next=>{
 });
 void cloudWorkspace?.start();
 render();
+setInterval(()=>{
+ const dot=app.querySelector('.assistant-unread');
+ if(!dot)return;
+ const notices=dueReminders(state());
+ const unread=notices.some(item=>item.unread);
+ if(unread&&ui.chat&&!ui.chat.trial&&!ui.dialog){
+  markRemindersRead(api,notices);
+  return;
+ }
+ dot.hidden=!unread;
+ dot.parentElement.setAttribute('aria-description',unread?'有未读任务提醒':'');
+},1000);

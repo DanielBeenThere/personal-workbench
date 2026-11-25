@@ -1,10 +1,11 @@
 import {api,cloudWorkspace} from './domain.js';
 import {createDemoAuth,createDemoModel,demoCredentials} from './integrations.js';
+import {dueReminders,markRemindersRead,taskReminderGuidance} from './task-reminders.js';
 const auth=cloudWorkspace?.auth||createDemoAuth(api),model=createDemoModel(api);
 
 const portraits=[['warm-female','暖色女助手'],['cool-female','冷色女助手'],['warm-male','暖色男助手'],['cool-male','冷色男助手']];
 const styles=[['direct','简洁直接'],['care','温暖关怀'],['fun','可爱有趣'],['custom','自定义']];
-const prompt='先给结论，再补充必要细节。优先根据工作台记录和参考资料回答。不确定就说明，缺少关键信息时问一个具体问题。不要编造事实、来源或任务进展。';
+const prompt='先给结论，再补充必要细节。优先根据工作台记录和参考资料回答。不确定就说明，缺少关键信息时问一个具体问题。不要编造事实、来源或任务进展。\n'+taskReminderGuidance;
 
 export function authView(h) {
  const {ui,button,primary,field,esc,state}=h;
@@ -77,7 +78,7 @@ export function settingsView(h) {
  <small id="assistant-name-hint" class="account-name-hint">留空时跟随账号昵称。</small>
  <span class="field-title">交流风格</span><div class="style-grid">${styles.map(([name,title])=>button(title,'assistant-style',a.style===name?'selected':'',`data-value="${name}"`)).join('')}</div>
  <header class="row-head"><h2>自定义风格</h2>${button('恢复默认','assistant-reset','',custom?'':'disabled')}</header>
- ${area('','customPrompt',a.customPrompt||prompt,`rows="5" aria-label="自定义风格" ${custom?'':'disabled'}`)}
+ ${area('','customPrompt',(custom&&a.customPrompt)||prompt,`rows="5" aria-label="自定义风格" ${custom?'':'disabled'}`)}
  ${custom?'':'<p class="muted">选择「自定义」后可编辑</p>'}
  <div class="button-row">${button('试聊一句','assistant-trial')}${primary('保存')}</div></form>`;
 }
@@ -95,9 +96,12 @@ export function ideaView(h) {
 export function chatView(h) {
  const {ui,state,button,avatar,esc,primary,safeURL}=h;
  const {trial,messages,pending,draft}=ui.chat;
- const settings=trial?ui.assistantDraft:state().settings.assistant;
+ const current=state();
+ const settings=trial?ui.assistantDraft:current.settings.assistant;
+ const visibleMessages=trial?messages:[...messages,...dueReminders(current).map(item=>({...item,role:'assistant'}))]
+  .sort((a,b)=>(a.at||0)-(b.at||0));
  return `<div class="chat-scrim" data-action="chat-close"></div><section class="chat" id="assistant-dialog" tabindex="-1" role="dialog" aria-labelledby="chat-heading"><header><div class="chat-title">${avatar(settings.avatar)}<div><strong id="chat-heading">${esc(settings.name||'小助手')}</strong>${trial?'<small>试聊 · 使用当前设置</small>':''}</div></div>${button('×','chat-close','icon-button','aria-label="关闭对话"')}</header>
- <div class="chat-scroll" role="log">${messages.map(item=>`<div class="message ${item.role==='user'?'outgoing':'incoming'}">${item.role==='user'?'':avatar(settings.avatar)}<div>${esc(item.text)}${item.sources?.length?`<ul class="message-sources">${item.sources.map(source=>{const url=safeURL(source.url);return url?`<li><a href="${url}" target="_blank" rel="noopener noreferrer">${esc(source.title||source.name||'来源')}</a></li>`:'';}).join('')}</ul>`:''}</div></div>`).join('')}
+ <div class="chat-scroll" role="log">${visibleMessages.map(item=>`<div class="message ${item.role==='user'?'outgoing':'incoming'}">${item.role==='user'?'':avatar(settings.avatar)}<div>${esc(item.text)}${item.sources?.length?`<ul class="message-sources">${item.sources.map(source=>{const url=safeURL(source.url);return url?`<li><a href="${url}" target="_blank" rel="noopener noreferrer">${esc(source.title||source.name||'来源')}</a></li>`:'';}).join('')}</ul>`:''}</div></div>`).join('')}
  ${pending?`<div class="message incoming">${avatar(settings.avatar)}<div>正在思考 <span class="typing">● ● ●</span></div></div>`:''}</div>
  <form data-form="chat"><textarea class="chat-input" name="message" rows="1" enterkeyhint="send" placeholder="输入消息" aria-label="输入消息">${esc(draft||'')}</textarea>${primary('发送')}</form></section>`;
 }
@@ -220,7 +224,7 @@ export async function settingsAction(action,h,event) {
   case 'confirm-portrait':ui.assistantDraft.avatar=ui.pickedAvatar;ui.section='personalization';render();return;
   case 'form:assistant':syncAssistant(ui);api.store.update(data=>{data.settings.assistant={...ui.assistantDraft,name:ui.assistantDraft.name.trim()||'小助手'};});ui.assistantDraft=null;ui.section='settings';notify('助手设置已保存');return;
   case 'assistant-trial':syncAssistant(ui);ui.chat={trial:true,messages:[],draft:''};await sendChat(h,'我今天先做什么？');return;
-  case 'chat-toggle':if(ui.chat){if(!ui.chat.trial)retainedChat=ui.chat;ui.chat=null;}else ui.chat=retainedChat;render();return;
+  case 'chat-toggle':if(ui.chat){if(!ui.chat.trial)retainedChat=ui.chat;ui.chat=null;}else {ui.chat=retainedChat;markRemindersRead(api,dueReminders(state()));}render();return;
   case 'chat-close':if(ui.chat&&!ui.chat.trial)retainedChat=ui.chat;ui.chat=null;render();return;
   case 'form:chat':await sendChat(h,values.message);return;
   case 'idea-new':ui.idea={title:'',body:''};render();return;
@@ -242,14 +246,14 @@ async function sendChat(h,text) {
  const value=String(text||'').trim();
  if(!chat||chat.pending||!value)return;
  const generation=++chatGeneration;
- chat.messages.push({role:'user',text:value});
+ chat.messages.push({role:'user',text:value,at:Date.now()});
  chat.draft='';
  chat.pending=true;
  render();
  try{
   const response=await model.send({text:value,assistant:chat.trial?ui.assistantDraft:state().settings.assistant});
-  if(generation===chatGeneration)chat.messages.push({role:'assistant',text:response.body,sources:response.sources});
- }catch(error){chat.messages.push({role:'assistant',text:error.message});}
+  if(generation===chatGeneration)chat.messages.push({role:'assistant',text:response.body,sources:response.sources,at:Date.now()});
+ }catch(error){chat.messages.push({role:'assistant',text:error.message,at:Date.now()});}
  chat.pending=false;
  if(ui.chat===chat){
   render();
