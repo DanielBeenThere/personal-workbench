@@ -1,7 +1,12 @@
 import {api,cloudWorkspace} from './domain.js';
 import {createDemoAuth,createDemoModel,demoCredentials} from './integrations.js';
+import {createLocalModel} from './local-model.js';
+import {runWorkspaceTool} from './workspace-tools.js';
+import {memoryMarkdown} from './assistant-memory.js';
 import {dueReminders,markRemindersRead,taskReminderGuidance} from './task-reminders.js';
-const auth=cloudWorkspace?.auth||createDemoAuth(api),model=createDemoModel(api);
+const auth=cloudWorkspace?.auth||createDemoAuth(api);
+const model=cloudWorkspace?createDemoModel(api):createLocalModel();
+const modelConnection=settings=>model.connection||settings.model;
 
 const portraits=[['warm-female','暖色女助手'],['cool-female','冷色女助手'],['warm-male','暖色男助手'],['cool-male','冷色男助手']];
 const styles=[['direct','简洁直接'],['care','温暖关怀'],['fun','可爱有趣'],['custom','自定义']];
@@ -41,18 +46,19 @@ function refreshCaptcha(ui) {
  ui.captchaId=challenge.id;
 }
 
-function toggle(label,action,on) {
- return `<label class="switch-row"><span>${label}</span><input type="checkbox" role="switch" data-onchange="${action}" ${on?'checked':''}></label>`;
+function toggle(label,action,on,disabled=false) {
+ return `<label class="switch-row"><span>${label}</span><input type="checkbox" role="switch" data-onchange="${action}" ${on?'checked':''} ${disabled?'disabled':''}></label>`;
 }
 
 export function settingsView(h) {
  const {ui,state,toolbar,field,primary,button,area,select,option,avatar,esc,accountAvatar}=h;
  const {account,settings}=state();
+ const connection=modelConnection(settings);
  const appearance=settings.appearance==='warm'?'warm':'cool';
  if(ui.section==='settings')return `${toolbar('设置','返回当前板块')}<div class="settings-stack">
   <section class="settings-card"><h2>账号</h2><div class="identity">${accountAvatar()}<strong>${esc(account.displayName||account.email||'Daniel')}</strong></div><div class="button-row">${button('修改昵称','setting-section','','data-value="nickname"')}${cloudWorkspace?'':button('修改密码','setting-section','','data-value="password"')}${button('上传头像','setting-section','','data-value="avatar"')}</div></section>
   <section class="settings-card"><h2 id="appearance-heading">外观</h2><div class="button-row" role="group" aria-labelledby="appearance-heading">${[['cool','冷色调'],['warm','暖色调']].map(([key,label])=>button(label,'appearance',appearance===key?'selected':'',`data-value="${key}" aria-pressed="${appearance===key}"`)).join('')}</div></section>
-  <section class="settings-card"><h2>小助手与模型</h2><p class="muted">DeepSeek · ${settings.model.status==='connected'?'已连接':'未连接'}</p><div class="button-row">${button('配置 API Key','setting-section','','data-value="model"')}${button('个性化小助手','setting-section','','data-value="personalization"')}</div></section>
+  <section class="settings-card"><h2>小助手与模型</h2><p class="muted">DeepSeek · ${connection.status==='connected'?'已连接':'未连接'}</p><div class="button-row">${button('配置 API Key','setting-section','','data-value="model"')}${button('个性化小助手','setting-section','','data-value="personalization"')}</div></section>
   <section class="settings-card"><h2>数据与备份</h2><div class="button-row">${button('导出备份','export-backup')}${button('从备份导入','import-backup','','title="支持 JSON 备份和旧版 HTML 待办清单"')}</div>${cloudWorkspace?'':toggle('自动备份','auto-backup',settings.autoBackup)}<input hidden id="backup-input" type="file" accept=".json,.html,.htm,application/json,text/html" data-onchange="backup-file"></section>
   ${button('退出登录','logout','danger')}
  </div>`;
@@ -60,13 +66,18 @@ export function settingsView(h) {
  if(ui.section==='password')return `${toolbar('修改密码','设置')}<form class="editor settings-form" data-form="password">${field('当前密码','oldPassword','','password','required')}${field('新密码','newPassword','','password','required minlength="6"')}${field('确认新密码','checkPassword','','password','required')}${primary('保存密码')}</form>`;
  if(ui.section==='avatar')return `${toolbar('上传头像','设置')}<form class="editor settings-form" data-form="avatar"><span>当前头像</span><div class="avatar-preview">${ui.avatarDraft?`<img class="avatar" src="${esc(ui.avatarDraft)}" alt="头像预览">`:accountAvatar()}</div><input name="image" type="file" accept="image/*" data-onchange="avatar-file" required>${primary('确认上传')}</form>`;
  if(ui.section==='model'){
-  const model=settings.model;
+  const model=connection;
+  const choices=ui.modelValidated?ui.modelChoices:(model.models||[]);
+  const selected=ui.modelValidated?ui.modelChoice:model.model;
+  const canSearch=cloudWorkspace||model.model==='deepseek-flash';
   return `${toolbar('小助手与模型','设置')}<div class="editor settings-form">
-  ${select('模型厂商','provider',option('DeepSeek','DeepSeek','DeepSeek'))}<p class="muted">当前连接 · ${model.status==='connected'?'已连接':'未连接'}（本地演示）</p>
+  ${select('模型厂商','provider',option('DeepSeek','DeepSeek','DeepSeek'))}<p class="muted">当前连接 · ${model.status==='connected'?'已连接':'未连接'}${cloudWorkspace?'（演示）':''}</p>
+  ${model.maskedKey?`<p class="muted">当前 API Key <code>${esc(model.maskedKey)}</code></p>`:''}
   <div class="button-row">${button('输入密钥','model-key')}${button('测试连接','model-test','soft')}${button('断开连接','model-disconnect')}</div>
-  ${ui.modelValidated?`<section class="guidance"><strong>测试通过</strong><p>确认前仍使用原连接。</p>${button('确认连接','model-confirm','primary')}</section>`:''}
-  ${select('当前模型','model',ui.modelChoices?.map(item=>option(item.id,item.name,ui.modelChoice||model.model)).join('')||option(model.model||'',({'demo-flash':'DeepSeek Flash（推荐）','demo-pro':'DeepSeek Pro'})[model.model]||'连接后选择模型',model.model||''))}
-  ${toggle('联网搜索','search-toggle',model.search)}<p class="muted">允许小助手按需搜索并显示来源。连接服务后生效。</p>
+  ${ui.modelValidated?`<section class="guidance"><strong>已获取可用模型</strong><p>确认时会发送一条简短测试消息，验证所选模型能对话。</p>${button('确认连接','model-confirm','primary')}</section>`:''}
+  ${select('当前模型','model',choices.map(item=>option(item.id,item.name,selected)).join('')||option(model.model||'',({'demo-flash':'DeepSeek Flash（推荐）','demo-pro':'DeepSeek Pro'})[model.model]||model.model||'连接后选择模型',model.model||''),'data-onchange="model-choice"')}
+  ${toggle('联网搜索','search-toggle',model.search,!canSearch)}<p class="muted">${canSearch?'开启后，小助手可按需搜索并显示来源。':'连接并选择 DeepSeek Flash 后可开启联网搜索。'}</p>
+  ${toggle('思考模式','thinking-toggle',settings.model.thinking)}<p class="muted">默认关闭。开启后，DeepSeek 可以深入推理，回复可能更慢。从下一条消息生效。</p>
   </div>`;
  }
  const a=ui.assistantDraft||(ui.assistantDraft={...settings.assistant});
@@ -80,7 +91,11 @@ export function settingsView(h) {
  <header class="row-head"><h2>自定义风格</h2>${button('恢复默认','assistant-reset','',custom?'':'disabled')}</header>
  ${area('','customPrompt',(custom&&a.customPrompt)||prompt,`rows="5" aria-label="自定义风格" ${custom?'':'disabled'}`)}
  ${custom?'':'<p class="muted">选择「自定义」后可编辑</p>'}
- <div class="button-row">${button('试聊一句','assistant-trial')}${primary('保存')}</div></form>`;
+ <div class="button-row">${button('试聊一句','assistant-trial')}${primary('保存')}</div>
+ <details><summary>长期记忆</summary>
+ ${area('当前账号的 memory.md','memoryPreview',memoryMarkdown(settings),'rows="5" readonly')}
+ ${button('下载 memory.md','memory-export')}
+ </details></form>`;
 }
 
 export function ideaView(h) {
@@ -95,14 +110,15 @@ export function ideaView(h) {
 
 export function chatView(h) {
  const {ui,state,button,avatar,esc,primary,safeURL}=h;
- const {trial,messages,pending,draft}=ui.chat;
+ const {trial,messages,pending,draft,progress}=ui.chat;
  const current=state();
  const settings=trial?ui.assistantDraft:current.settings.assistant;
  const visibleMessages=trial?messages:[...messages,...dueReminders(current).map(item=>({...item,role:'assistant'}))]
   .sort((a,b)=>(a.at||0)-(b.at||0));
- return `<div class="chat-scrim" data-action="chat-close"></div><section class="chat" id="assistant-dialog" tabindex="-1" role="dialog" aria-labelledby="chat-heading"><header><div class="chat-title">${avatar(settings.avatar)}<div><strong id="chat-heading">${esc(settings.name||'小助手')}</strong>${trial?'<small>试聊 · 使用当前设置</small>':''}</div></div>${button('×','chat-close','icon-button','aria-label="关闭对话"')}</header>
- <div class="chat-scroll" role="log">${visibleMessages.map(item=>`<div class="message ${item.role==='user'?'outgoing':'incoming'}">${item.role==='user'?'':avatar(settings.avatar)}<div>${esc(item.text)}${item.sources?.length?`<ul class="message-sources">${item.sources.map(source=>{const url=safeURL(source.url);return url?`<li><a href="${url}" target="_blank" rel="noopener noreferrer">${esc(source.title||source.name||'来源')}</a></li>`:'';}).join('')}</ul>`:''}</div></div>`).join('')}
- ${pending?`<div class="message incoming">${avatar(settings.avatar)}<div>正在思考 <span class="typing">● ● ●</span></div></div>`:''}</div>
+ return `<div class="chat-scrim" data-action="chat-close"></div><section class="chat" id="assistant-dialog" tabindex="-1" role="dialog" aria-labelledby="chat-heading"><header><div class="chat-title">${avatar(settings.avatar)}<div><strong id="chat-heading">${esc(settings.name||'小助手')}</strong>${trial?'<small>试聊 · 使用当前设置</small>':''}</div></div><div class="button-row">${messages.length&&!pending?button('新对话','chat-reset'):''}${button('×','chat-close','icon-button','aria-label="关闭对话"')}</div></header>
+ <div class="chat-scroll" role="log" data-message-count="${visibleMessages.length}">${visibleMessages.map(item=>`<div class="message ${item.role==='user'?'outgoing':'incoming'}">${item.role==='user'?'':avatar(settings.avatar)}<div>${esc(item.text)}${item.sources?.length?`<ul class="message-sources">${item.sources.map(source=>{const url=safeURL(source.url);return url?`<li><a href="${url}" target="_blank" rel="noopener noreferrer">${esc(source.title||source.name||'来源')}</a></li>`:'';}).join('')}</ul>`:''}</div></div>`).join('')}
+ ${pending&&!ui.chat.pendingChange?`<div class="message incoming">${avatar(settings.avatar)}<div>${esc(progress||'正在思考')} <span class="typing">● ● ●</span></div></div>`:''}
+ ${ui.chat.pendingChange?`<section class="guidance" aria-label="待确认的工作台操作"><p>${esc(ui.chat.pendingChange.description)}</p><div class="button-row">${button('取消操作','assistant-cancel')}${button('确认操作','assistant-confirm','primary')}</div></section>`:''}</div>
  <form data-form="chat"><textarea class="chat-input" name="message" rows="1" enterkeyhint="send" placeholder="输入消息" aria-label="输入消息">${esc(draft||'')}</textarea>${primary('发送')}</form></section>`;
 }
 
@@ -118,8 +134,29 @@ function saveIdeaDraft(ui) {
  if(form)Object.assign(ui.idea,{title:form.elements.title.value,body:form.elements.body.value});
 }
 const textTitle=body=>body.trim().split(/[\r\n。！？]/)[0].slice(0,24);
-let retainedChat={messages:[],draft:''};
-let chatGeneration=0;
+const newChat=(trial=false)=>({trial,messages:[],transcript:[],draft:''});
+let retainedChat=newChat();
+let assistantOwner=null;
+function cancelPendingChange(chat) {
+ if(!chat?.pendingChange)return;
+ chat.pendingChange.resolve({ok:false,canceled:true});
+ chat.pendingChange=null;
+}
+export function closeAssistantChat(ui) {
+ if(ui.chat?.trial)cancelPendingChange(ui.chat);
+ ui.chat=null;
+}
+export function syncAssistantSession(ui, state) {
+ const owner=state.session?(cloudWorkspace?cloudWorkspace.getAccountId():state.account.email):null;
+ if(owner===assistantOwner)return false;
+ assistantOwner=owner;
+ cancelPendingChange(ui.chat);
+ cancelPendingChange(retainedChat);
+ retainedChat=newChat();
+ Object.assign(ui,{chat:null,dialog:null,settingsOrigin:null,idea:null,assistantDraft:null,modelKey:'',modelValidated:false,modelChoices:[],modelChoice:''});
+ if(!cloudWorkspace)void model.disconnect();
+ return true;
+}
 
 export async function settingsAction(action,h,event) {
  const {ui,state,api,render,notify,confirmation,openTask,makeId}=h;
@@ -127,7 +164,7 @@ export async function settingsAction(action,h,event) {
  const control=event.target.closest('[data-action]')||event.target;
  const {value,id}=control.dataset;
  switch(action){
-  case 'auth-mode':ui.authMode=value;ui.authMessage='';render();return;
+  case 'auth-mode':if(value==='register'&&!cloudWorkspace&&ui.authMode!==value)refreshCaptcha(ui);ui.authMode=value;ui.authMessage='';render();return;
   case 'toggle-registration-password':{
    const input=document.getElementById('registration-password');
    const toggle=input.form.querySelector('[data-action="toggle-registration-password"]');
@@ -186,6 +223,11 @@ export async function settingsAction(action,h,event) {
     const url=URL.createObjectURL(new Blob([typeof data==='string'?data:JSON.stringify(data,null,2)],{type:'application/json'}));
     const a=Object.assign(document.createElement('a'),{href:url,download:`个人工作台-${new Date().toISOString().slice(0,10)}.json`});a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);return;
   }
+  case 'memory-export':{
+    const url=URL.createObjectURL(new Blob([memoryMarkdown(state().settings)],{type:'text/markdown;charset=utf-8'}));
+    Object.assign(document.createElement('a'),{href:url,download:'memory.md'}).click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);return;
+  }
   case 'import-backup':document.querySelector('#backup-input').click();return;
   case 'backup-file':{
     const file=event.target.files[0];if(!file)return;const text=await file.text();
@@ -199,34 +241,80 @@ export async function settingsAction(action,h,event) {
   case 'auto-backup':api.store.update(data=>{data.settings.autoBackup=event.target.checked;});return;
   case 'logout':confirmation('退出登录？','可再次使用当前账号登录。',async()=>{
    await auth.logout();
+   if(!cloudWorkspace)await model.disconnect();
+   Object.assign(ui,{modelKey:'',modelValidated:false,modelChoices:[],modelChoice:''});
    Object.assign(ui,{dialog:null,section:'',chat:null,authMode:'login',authMessage:'',authChallenge:false});
-   retainedChat={messages:[],draft:''};
+   cancelPendingChange(retainedChat);
+   retainedChat=newChat();
    render();
   },null);return;
   case 'model-key':ui.dialog={kind:'model-key'};render();return;
   case 'form:model-key':ui.modelKey=values.key;ui.modelValidated=false;ui.dialog=null;render();return;
   case 'model-test':{
    if(!ui.modelKey)throw new Error('请先输入密钥。');
+   ui.modelValidated=false;ui.modelChoices=[];
    const test=await model.test({provider:'DeepSeek',apiKey:ui.modelKey});
-   ui.modelValidated=test.testId;ui.modelChoices=test.models;ui.modelChoice=test.models[0]?.id;render();return;
+   ui.modelKey='';
+   ui.modelValidated=test.testId;ui.modelChoices=test.models;ui.modelChoice=(test.models.find(item=>/flash/i.test(item.id))||test.models[0])?.id;render();return;
   }
   case 'model-confirm': {
    const value=document.querySelector('[name="model"]').value;
-   await model.confirm({testId:ui.modelValidated,model:value,search:state().settings.model.search});
-   ui.modelKey='';ui.modelValidated=false;notify('模拟连接已确认');return;
+   const confirmButton=event.target.closest('button');
+   confirmButton.disabled=true;
+   try{await model.confirm({testId:ui.modelValidated,model:value,search:state().settings.model.search});}
+   finally{confirmButton.disabled=false;}
+   ui.modelKey='';ui.modelValidated=false;ui.modelChoices=[];notify(cloudWorkspace?'模拟连接已确认':'DeepSeek 已连接');return;
   }
   case 'model-disconnect':await model.disconnect();ui.modelKey='';ui.modelValidated=false;ui.modelChoices=[];render();return;
-  case 'search-toggle':api.store.update(data=>{data.settings.model.search=event.target.checked;});return;
+  case 'model-choice':
+   if(ui.modelValidated)ui.modelChoice=event.target.value;
+   else if(!cloudWorkspace&&model.connection.status==='connected') {
+    const select=event.target;
+    select.disabled=true;
+    try{await model.selectModel(select.value);}finally{render();}
+   }
+   return;
+  case 'search-toggle':
+   if(cloudWorkspace)api.store.update(data=>{data.settings.model.search=event.target.checked;});
+   else model.setSearch(event.target.checked);
+   return;
+  case 'thinking-toggle':api.store.update(data=>{data.settings.model.thinking=event.target.checked;});return;
   case 'assistant-style':syncAssistant(ui);ui.assistantDraft.style=value;render();return;
   case 'assistant-reset':syncAssistant(ui);ui.assistantDraft.customPrompt=prompt;render();return;
   case 'assistant-avatars':syncAssistant(ui);ui.pickedAvatar=ui.assistantDraft.avatar;ui.section='assistant-avatars';render();return;
   case 'choose-portrait':ui.pickedAvatar=value;render();return;
   case 'confirm-portrait':ui.assistantDraft.avatar=ui.pickedAvatar;ui.section='personalization';render();return;
   case 'form:assistant':syncAssistant(ui);api.store.update(data=>{data.settings.assistant={...ui.assistantDraft,name:ui.assistantDraft.name.trim()||'小助手'};});ui.assistantDraft=null;ui.section='settings';notify('助手设置已保存');return;
-  case 'assistant-trial':syncAssistant(ui);ui.chat={trial:true,messages:[],draft:''};await sendChat(h,'我今天先做什么？');return;
-  case 'chat-toggle':if(ui.chat){if(!ui.chat.trial)retainedChat=ui.chat;ui.chat=null;}else {ui.chat=retainedChat;markRemindersRead(api,dueReminders(state()));}render();return;
-  case 'chat-close':if(ui.chat&&!ui.chat.trial)retainedChat=ui.chat;ui.chat=null;render();return;
-  case 'form:chat':await sendChat(h,values.message);return;
+  case 'assistant-trial':syncAssistant(ui);closeAssistantChat(ui);ui.chat=newChat(true);await sendChat(h,'我今天先做什么？');return;
+  case 'chat-toggle':
+   if(ui.chat)closeAssistantChat(ui);
+   else {ui.chat=retainedChat;markRemindersRead(api,dueReminders(state()));}
+   render();return;
+  case 'chat-close':closeAssistantChat(ui);render();return;
+  case 'chat-reset':
+   if(ui.chat&&!ui.chat.pending){
+    ui.chat=newChat(ui.chat.trial);
+    if(!ui.chat.trial)retainedChat=ui.chat;
+    render();
+   }
+   return;
+  case 'assistant-cancel':
+  case 'assistant-confirm':{
+   const chat=ui.chat;
+   const change=chat?.pendingChange;
+   if(!change)return;
+   chat.pendingChange=null;
+   render();
+   try{
+    const confirm=action==='assistant-confirm'&&state().session&&assistantOwner===change.owner;
+    const result=confirm?{ok:true,message:await change.perform()}:{ok:false,canceled:true};
+    change.resolve(result);
+   }catch(error){
+    change.resolve({ok:false,error:error.message});
+   }
+   return;
+  }
+  case 'form:chat':await sendChat(h,event.target.elements.message.value);return;
   case 'idea-new':ui.idea={title:'',body:''};render();return;
   case 'idea-open':ui.idea=structuredClone(state().ideas.find(item=>item.id===id));render();return;
   case 'form:idea':{
@@ -237,24 +325,43 @@ export async function settingsAction(action,h,event) {
    ui.idea=null;render();return;
   }
   case 'idea-delete':saveIdeaDraft(ui);confirmation('删除灵感？','已转成任务的内容将保留。',()=>{api.store.update(data=>{data.ideas=data.ideas.filter(item=>item.id!==ui.idea.id);});ui.idea=null;ui.dialog=null;render();},null);return;
-  case 'idea-convert':openTask(null,null,state().ideas.find(item=>item.id===ui.idea.id));return;
+  case 'idea-convert':saveIdeaDraft(ui);openTask(null,null,ui.idea);return;
  }
 }
 
 async function sendChat(h,text) {
  const {ui,state,render}=h, chat=ui.chat;
- const value=String(text||'').trim();
- if(!chat||chat.pending||!value)return;
- const generation=++chatGeneration;
+ const value=String(text??'');
+ if(!chat||chat.pending||!value.trim())return;
+ const owner=assistantOwner;
+ const isCurrent=()=>owner===assistantOwner&&state().session&&(chat.trial?ui.chat===chat:retainedChat===chat);
  chat.messages.push({role:'user',text:value,at:Date.now()});
  chat.draft='';
  chat.pending=true;
  render();
  try{
-  const response=await model.send({text:value,assistant:chat.trial?ui.assistantDraft:state().settings.assistant});
-  if(generation===chatGeneration)chat.messages.push({role:'assistant',text:response.body,sources:response.sources,at:Date.now()});
- }catch(error){chat.messages.push({role:'assistant',text:error.message,at:Date.now()});}
+  const {settings,account}=state();
+  if(cloudWorkspace)throw new Error('线上助手的模型服务尚未接入。请在本地验收版测试对话。');
+  const response=await model.send({
+   text:value,transcript:chat.transcript,thinking:settings.model.thinking,isCurrent,
+   assistant:chat.trial?ui.assistantDraft:settings.assistant,accountName:account.displayName,
+   memory:memoryMarkdown(settings),
+   onProgress(name, text){
+    chat.progress=text||(name==='read_workspace'?'正在查询工作台…':name==='change_workspace'?'正在处理工作台操作…':'正在处理…');
+    if(ui.chat===chat)render();
+   },
+   runTool(name,args){
+    if(!isCurrent())throw new Error('会话已关闭或账号已变化。');
+    return runWorkspaceTool(api,name,args,(description,perform)=>new Promise(resolve=>{
+     chat.pendingChange={description,perform,owner,resolve};
+     if(ui.chat===chat)render();
+    }));
+   },
+  });
+  if(isCurrent())chat.messages.push({role:'assistant',text:response.body,sources:response.sources,at:Date.now()});
+ }catch(error){if(isCurrent())chat.messages.push({role:'assistant',text:error.message,error:true,at:Date.now()});}
  chat.pending=false;
+ chat.progress='';
  if(ui.chat===chat){
   render();
   const reply=chat.messages.at(-1);
@@ -273,6 +380,7 @@ export function bindVoice(h) {
   try{gesture.recognizer?.abort();}catch{}
  };
  const submitRecording=gesture=>{
+  if(gesture.owner!==assistantOwner)return;
   if(!gesture.released||gesture.canceled||gesture.submitted||!gesture.transcript)return;
   gesture.submitted=true;
   if(gesture.node.matches('.assistant-launcher,.chat-input')){
@@ -288,7 +396,7 @@ export function bindVoice(h) {
   const node=event.target.closest('.assistant-launcher,.chat-input,.voice-button,[data-action="idea-new"]');
   if(!node||event.button!==0||press)return;
   if(node.matches('.assistant-launcher'))node.setPointerCapture(event.pointerId);
-  const gesture={id:event.pointerId,x:event.clientX,y:event.clientY,node};
+  const gesture={id:event.pointerId,x:event.clientX,y:event.clientY,node,owner:assistantOwner};
   press=gesture;
   gesture.timer=setTimeout(()=>{
    if(press!==gesture||gesture.dragged)return;
@@ -297,7 +405,7 @@ export function bindVoice(h) {
    if(!Speech){notify('当前浏览器未提供语音转写，请使用文字输入。');return;}
    const recognizer=new Speech();gesture.recognizer=recognizer;recognizer.lang='zh-CN';
    recognizer.onresult=result=>{
-    gesture.transcript=[...result.results].map(item=>item[0].transcript).join('').trim();
+    gesture.transcript=[...result.results].map(item=>item[0].transcript).join('');
     submitRecording(gesture);
    };
    recognizer.onerror=()=>{

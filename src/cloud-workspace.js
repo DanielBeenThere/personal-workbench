@@ -194,6 +194,21 @@ export function createCloudWorkspace(initialState, data = createCloudData()) {
 
   return {
     getStatus: () => status,
+    getAccountId: () => identity?.id,
+    async readForAssistant() {
+      const user = identity;
+      if (!user) throw new Error("请先登录工作台。");
+      if (hasChanges() && !writing) await flush();
+      if (writing || conflict || hasChanges()) throw new Error("工作台改动尚未同步，请同步完成后再查询。");
+      const revision = state.revision;
+      const row = await data.load(user.id, await token());
+      if (identity !== user || revision !== state.revision || hasChanges()) {
+        throw new Error("工作台刚刚发生变化，请重新查询。");
+      }
+      if (!row || row.revision < remoteRevision) throw new Error("暂时无法取得 Supabase 上的工作台数据。");
+      if (row.revision > remoteRevision) apply(row, user);
+      return structuredClone(state);
+    },
     store: {
       get: () => structuredClone(state),
       update(edit) {

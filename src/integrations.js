@@ -49,6 +49,8 @@ export function createDemoAuth(api, { storage = globalThis.localStorage, now = D
   baseSettings.autoBackup = false;
   baseSettings.model = { provider: "DeepSeek", status: "disconnected", model: "", search: false };
   baseSettings.assistant = { name: "小助手", userName: "", avatar: "cool-female", style: "direct", customPrompt: "" };
+  baseSettings.assistantMemory = [];
+  baseSettings.readReminders = [];
   function snapshot(state) {
     return Object.fromEntries(profileFields.map((key) => [key, structuredClone(state[key])]));
   }

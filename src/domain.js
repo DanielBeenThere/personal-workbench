@@ -32,7 +32,8 @@ function makeInitialState() {
     settings: {
       appearance: "cool", autoBackup: false,
       assistant: { name: "小助手", userName: "", avatar: "cool-female", style: "direct", customPrompt: "" },
-      model: { provider: "DeepSeek", status: "disconnected", model: "", search: false },
+      assistantMemory: [],
+      model: { provider: "DeepSeek", status: "disconnected", model: "", search: false, thinking: false },
     },
   };
 }
@@ -184,14 +185,22 @@ function validateTask(state, task, previous) {
 function saveTask(store, input, { confirm = false } = {}) {
   const snapshot = store.get();
   const existing = get(snapshot.tasks, input.id);
+  const sourceIdeaId = !input.id ? input.ideaId : null;
+  if (sourceIdeaId) {
+    const converted = snapshot.tasks.find(task => task.ideaId === sourceIdeaId);
+    if (converted && !get(snapshot.ideas, sourceIdeaId)) return { ok: true, item: converted, alreadyExists: true };
+    if (converted) throw new Error("这条灵感已关联到现有任务，请查看已转换的任务。");
+  }
   const affected = snapshot.tasks.filter((t) => t.parentId && t.parentId === input.id && t.status !== done);
   if (input.status === done && existing?.status !== done && !confirm) return { ok: false, code: "CONFIRM_REQUIRED", affected };
   return store.update((state) => {
     const previous = get(state.tasks, input.id);
+    const source = sourceIdeaId && get(state.ideas, sourceIdeaId);
+    if (sourceIdeaId && !source) throw new Error("原灵感已不存在，无法转换。");
     const task = {
       ...previous, ...input,
-      id: input.id || identifier(), title: nameRequired(input.title, "任务名称"),
-      parentId: input.parentId || null, themeId: input.themeId || null, description: input.description || "",
+      id: input.id || identifier(), title: nameRequired(input.title ?? source?.title, "任务名称"),
+      parentId: input.parentId || null, themeId: input.themeId || null, description: input.description ?? source?.body ?? "",
       status: input.status || "未开始", due: input.due || "", assignee: input.assignee || "本人",
       priority: Boolean(input.priority), prerequisites: [...new Set(input.prerequisites || [])],
       updates: mergeUpdates(previous?.updates, input.updates),
@@ -222,6 +231,7 @@ function saveTask(store, input, { confirm = false } = {}) {
     else state.tasks[index] = task;
     if (task.parentId) synchronizeParent(state, task.parentId);
     if (previous?.parentId && previous.parentId !== task.parentId) synchronizeParent(state, previous.parentId);
+    if (source) state.ideas = state.ideas.filter(idea => idea.id !== sourceIdeaId);
     return { ok: true, item: task };
   });
 }

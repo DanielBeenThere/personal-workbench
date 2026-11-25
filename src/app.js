@@ -1,6 +1,6 @@
 import {api,cloudWorkspace,assignees as people} from './domain.js';
 import {dueReminders,markRemindersRead} from './task-reminders.js';
-import {authView, settingsView, ideaView, chatView, settingsAction, bindVoice} from './settings.js';
+import {authView, settingsView, ideaView, chatView, settingsAction, bindVoice, syncAssistantSession, closeAssistantChat} from './settings.js';
 
 const app = document.querySelector('#app');
 const state = () => api.store.get();
@@ -22,7 +22,7 @@ const field = (label,name,value='',type='text',attrs='') => `<label class="field
 const dateField = value => `<label class="field"><span id="task-due-label">计划完成时间</span><span class="date-control ${value?'':'date-empty'}"><input name="due" type="date" aria-labelledby="task-due-label" value="${esc(value)}"><span class="date-hint" aria-hidden="true">选择日期${icon('chevron')}</span></span></label>`;
 const area = (label,name,value='',attrs='') => `<label class="field"><span>${label}</span><textarea name="${name}" ${attrs}>${esc(value)}</textarea></label>`;
 const option = (val,text,current,disabled=false) => `<option value="${esc(val)}" ${String(val)===String(current)?'selected':''} ${disabled?'disabled':''}>${esc(text)}</option>`;
-const select = (label,name,options) => `<label class="field"><span>${label}</span><select name="${name}">${options}</select></label>`;
+const select = (label,name,options,attrs='') => `<label class="field"><span>${label}</span><select name="${name}" ${attrs}>${options}</select></label>`;
 const taskSelect = (label,name,value,options) => `<div class="field dropdown"><label id="field-${name}" for="trigger-${name}">${label}</label><select name="${name}" hidden aria-hidden="true" tabindex="-1">${options}</select><button id="trigger-${name}" class="dropdown-trigger" type="button" data-action="open-options" aria-labelledby="field-${name}" aria-haspopup="listbox" aria-expanded="false"><span>${esc(value)}</span>${icon('chevron')}</button></div>`;
 const checkbox = (label,name,checked) => `<label class="check ${checked?'checked':''}"><input type="checkbox" name="${name}" ${checked?'checked':''}>${label}</label>`;
 const avatar = (name,size='') => `<img class="avatar ${size}" src="./assets/avatar-${/^(cool|warm)-(male|female)$/.test(name)?name:'cool-female'}.png" alt="" draggable="false">`;
@@ -330,6 +330,7 @@ function toggleMobileSidebar(){
 
 function render(origin) {
   const data=state();
+  syncAssistantSession(ui,data);
   document.documentElement.dataset.theme=data.session&&data.settings.appearance==='warm'?'warm':'cool';
   const previousWorkspace=app.querySelector('.workspace');
   if(renderedView)viewPositions.set(renderedView,window.scrollY);
@@ -382,7 +383,11 @@ function render(origin) {
   const chatScroll=app.querySelector('.chat-scroll');
   const chatInput=app.querySelector('.chat-input');
   if(chatInput?.value)resizeChatInput(chatInput);
-  if(chatScroll) chatScroll.scrollTop=following?chatScroll.scrollHeight:scrollPosition;
+  if(chatScroll){
+    const newMessage=chatScroll.dataset.messageCount!==previousScroll?.dataset.messageCount;
+    chatScroll.scrollTop=following||newMessage?chatScroll.scrollHeight:scrollPosition;
+    if(newMessage)requestAnimationFrame(()=>{if(chatScroll.isConnected)chatScroll.scrollTop=chatScroll.scrollHeight;});
+  }
   const nextView=viewKey();
   const viewChanged=nextView!==renderedView;
   const themeChanged=nextView==='themes'&&ui.themeId!==renderedThemeId;
@@ -489,6 +494,7 @@ async function saveTask(task,confirm=false){
  const result=await api.tasks.save(task,{confirm});
  if(!result.ok && result.code==='CONFIRM_REQUIRED'){confirmation(task.parentId?'确认完成二级任务？':'确认完成一级任务？',task.title,()=>saveTask(task,true),ui.dialog,result.affected,true);return;}
  if(!result.ok)throw new Error(result.message||'保存失败');
+ if(!task.id&&task.ideaId)ui.idea=null;
  if(result.item.status==='已完成'&&prior?.status!=='已完成'){complete(result.item);return;}
  if(prior?.status==='已完成'){ui.themeId=result.item.themeId||null;ui.mobileTree=true;ui.page='themes';}
  close();
@@ -533,10 +539,10 @@ function requestTaskConversion(form) {
 app.addEventListener('click',async event=>{
  if(!event.target.closest('.dropdown'))hideOptions();
  const target=event.target.closest('[data-action]');
- if(!target){if(ui.chat&&!event.target.closest('.chat,.assistant-launcher')){ui.chat=null;render();}return;}
+ if(!target){if(ui.chat&&!event.target.closest('.chat,.assistant-launcher')){closeAssistantChat(ui);render();}return;}
  const {action,id,value,parent}=target.dataset;
  try {
-  if(ui.chat&&!target.closest('.chat,.assistant-launcher')&&action!=='dismiss-overlay'){ui.chat=null;render();return;}
+ if(ui.chat&&!target.closest('.chat,.assistant-launcher')&&action!=='dismiss-overlay'){closeAssistantChat(ui);render();return;}
   if(action==='navigate'){navigate(value);return;}
   if(action==='workbench'){navigate('today');return;}
   if(action==='sidebar'){
@@ -673,7 +679,7 @@ document.addEventListener('keydown',event=>{
   entries[i]?.focus();
   return;
  }
- if(event.key==='Escape'){if(ui.sidebar)toggleMobileSidebar();else if(ui.dialog)close();else if(ui.chat){ui.chat=null;render();}return;}
+ if(event.key==='Escape'){if(ui.sidebar)toggleMobileSidebar();else if(ui.dialog)close();else if(ui.chat){closeAssistantChat(ui);render();}return;}
  if(event.key!=='Tab'||!ui.dialog&&!ui.sidebar)return;
  const dialog=app.querySelector(ui.sidebar?'.sidebar-open:not([inert])':'.dialog[role=dialog]');
  if(!dialog)return;
@@ -697,7 +703,8 @@ window.addEventListener('workbench-cloud-status',()=>{
 });
 api.store.subscribe(next=>{
  queueMicrotask(()=>{
-  if(next.revision===lastRenderedRevision||ui.dialog&&next.session)return;
+  const changedAccount=syncAssistantSession(ui,next);
+  if(!changedAccount&&(next.revision===lastRenderedRevision||ui.dialog&&next.session))return;
   if(!next.session){ui.dialog=null;ui.chat=null;}
   render();
  });
