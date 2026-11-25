@@ -7,10 +7,26 @@ const styles = {
   fun: "语气轻松、有趣，优先讲清楚内容。",
 };
 
-export function createLocalModel(fetcher = fetch, { serviceName = "本地模型服务" } = {}) {
+export function createLocalModel(fetcher = fetch, { serviceName = "本地模型服务", persistence } = {}) {
   let pending;
   let active;
   let testGeneration = 0;
+  const current = () => persistence ? persistence.read() : active;
+  const savedKey = { useSavedConnection: true };
+  async function requestKey(connection) {
+    if (persistence?.reveal) return { apiKey: await persistence.reveal(connection.credential) };
+    return persistence ? savedKey : { apiKey: connection.apiKey };
+  }
+  async function save(connection) {
+    if (persistence) await persistence.write(connection);
+    else active = connection;
+  }
+
+  function resetSession() {
+    testGeneration++;
+    pending = null;
+    active = null;
+  }
 
   async function request(path, input) {
     let response;
@@ -30,18 +46,20 @@ export function createLocalModel(fetcher = fetch, { serviceName = "本地模型�
     return data;
   }
 
-  async function verifyChat(apiKey, model) {
-    const result = await request("chat", { apiKey, model, probe: true, search: model === "deepseek-flash", messages: [
+  async function verifyChat(credentials, model) {
+    const result = await request("chat", { ...credentials, model, probe: true, search: model === "deepseek-flash", messages: [
       { role: "system", content: "这是连接测试，不调用工具。" }, { role: "user", content: "仅回复 OK。" },
     ] });
     if (!result.verified) throw new Error("模型未能完成聊天验证。");
+    return result;
   }
 
   return {
     get connection() {
-      return active
-        ? { status: "connected", model: active.model, models: active.models, search: active.search,
-          maskedKey: "********" + (active.apiKey.length >= 12 ? active.apiKey.slice(-4) : "") }
+      const connection = current();
+      return connection
+        ? { status: "connected", model: connection.model, models: connection.models, search: connection.search,
+          maskedKey: connection.maskedKey }
         : { status: "disconnected", model: "", models: [], search: false };
     },
     async test({ apiKey }) {
@@ -59,32 +77,47 @@ export function createLocalModel(fetcher = fetch, { serviceName = "本地模型�
         throw new Error("请重新测试连接并选择模型。");
       }
       const attempt = pending;
-      await verifyChat(attempt.apiKey, model);
+      const serverSaves = persistence && !persistence.protect;
+      const result = await verifyChat({
+        apiKey: attempt.apiKey, ...(serverSaves && { saveConnection: true }),
+      }, model);
       if (pending !== attempt) throw new Error("连接设置已变化，请重新测试。");
-      active = { apiKey: attempt.apiKey, models: attempt.models, model, search: active?.search === true && model === "deepseek-flash" };
+      const credential = persistence?.protect ? await persistence.protect(attempt.apiKey) : result.credential;
+      if (pending !== attempt) throw new Error("连接设置已变化，请重新测试。");
+      if (serverSaves && (!credential || !result.maskedKey)) throw new Error("云端模型服务还无法保存连接。");
+      const maskedKey = result.maskedKey || "********" + (attempt.apiKey.length >= 12 ? attempt.apiKey.slice(-4) : "");
+      const connection = { model, models: attempt.models, maskedKey, search: current()?.search === true && model === "deepseek-flash" };
+      await save(persistence ? { ...connection, credential } : { ...connection, apiKey: attempt.apiKey });
       pending = null;
     },
     async selectModel(model) {
-      if (!active?.models.some(item => item.id === model)) throw new Error("请选择已验证的模型。");
-      if (active.model === model) return;
-      const prior = active;
-      await verifyChat(prior.apiKey, model);
-      if (active !== prior) throw new Error("连接设置已变化，请重试。");
-      active.model = model;
-      if (model !== "deepseek-flash") active.search = false;
+      const prior = current();
+      if (!prior?.models.some(item => item.id === model)) throw new Error("请选择已验证的模型。");
+      if (prior.model === model) return;
+      const generation = testGeneration;
+      const credentials = await requestKey(prior);
+      if (generation !== testGeneration) throw new Error("连接设置已变化，请重试。");
+      await verifyChat(credentials, model);
+      const latest = current();
+      if (generation !== testGeneration || !latest || latest.model !== prior.model
+        || latest.credential !== prior.credential || latest.apiKey !== prior.apiKey) throw new Error("连接设置已变化，请重试。");
+      await save({ ...latest, model, search: latest.search && model === "deepseek-flash" });
     },
-    setSearch(enabled) {
-      if (active?.model !== "deepseek-flash") throw new Error("请先连接并选择 DeepSeek Flash。");
-      active.search = enabled === true;
+    async setSearch(enabled) {
+      const connection = current();
+      if (connection?.model !== "deepseek-flash") throw new Error("请先连接并选择 DeepSeek Flash。");
+      await save({ ...connection, search: enabled === true });
     },
+    resetSession,
     async disconnect() {
-      testGeneration++;
-      pending = null;
-      active = null;
+      resetSession();
+      if (persistence && current()) await save(null);
     },
     async send({ transcript, text, assistant, accountName, memory = "", thinking = false, runTool, onProgress, isCurrent = () => true }) {
-      if (!active) throw new Error("请先在「设置 → 小助手与模型」连接 DeepSeek。");
-      const { apiKey, model, search } = active;
+      const connection = current();
+      if (!connection) throw new Error("请先在「设置 → 小助手与模型」连接 DeepSeek。");
+      const { model, search } = connection;
+      const credentials = await requestKey(connection);
       const tone = assistant?.style === "custom" ? assistant.customPrompt : styles[assistant?.style] || styles.direct;
       const system = [
         "你是个人工作台的助手「" + (assistant?.name || "小助手") + "」，称用户为「" + (assistant?.userName || accountName || "你") + "」。",
@@ -100,6 +133,7 @@ export function createLocalModel(fetcher = fetch, { serviceName = "本地模型�
         if (!isCurrent()) throw new Error("当前会话已结束。");
       }
 
+      checkSession();
       transcript.push({ role: "user", content: text });
       const sources = new Map();
       const processed = new Set();
@@ -108,7 +142,7 @@ export function createLocalModel(fetcher = fetch, { serviceName = "本地模型�
         let response;
         try {
           response = await request("chat", {
-            apiKey, model, search, thinking, messages: [{ role: "system", content: system }, ...transcript],
+            ...credentials, model, search, thinking, messages: [{ role: "system", content: system }, ...transcript],
           });
         } catch (error) {
           if (round === 0) transcript.pop();
@@ -134,7 +168,7 @@ export function createLocalModel(fetcher = fetch, { serviceName = "本地模型�
             const args = JSON.parse(call.function.arguments);
             if (call.function.name === "search_public_web") {
               if (!search) throw new Error("联网搜索已关闭。");
-              const found = await request("search", { apiKey, model, thinking, query: args?.query });
+              const found = await request("search", { ...credentials, model, thinking, query: args?.query });
               for (const source of found.sources) sources.set(source.url, source);
               result = { ok: true, ...found };
             } else {

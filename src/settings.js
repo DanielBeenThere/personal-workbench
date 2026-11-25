@@ -1,11 +1,25 @@
 import {api,cloudWorkspace} from './domain.js';
 import {createDemoAuth,demoCredentials} from './integrations.js';
 import {createLocalModel} from './local-model.js';
+import {protectLocalModelKey,revealLocalModelKey} from './local-model-credentials.js';
 import {runWorkspaceTool} from './workspace-tools.js';
 import {memoryMarkdown} from './assistant-memory.js';
 import {dueReminders,markRemindersRead,taskReminderGuidance} from './task-reminders.js';
 const auth=cloudWorkspace?.auth||createDemoAuth(api);
-const model=cloudWorkspace?createLocalModel(cloudWorkspace.modelRequest,{serviceName:'云端模型服务'}):createLocalModel();
+const model=createLocalModel(cloudWorkspace?.modelRequest,{
+ ...(cloudWorkspace&&{serviceName:'云端模型服务'}),
+ persistence:{
+  read:()=>api.store.get().settings.model.connection,
+  async write(connection){
+   api.store.update(data=>{data.settings.model.connection=connection;});
+   await cloudWorkspace?.readForAssistant();
+  },
+  ...(!cloudWorkspace&&{
+   protect:apiKey=>protectLocalModelKey(api.store.get().account.email,apiKey),
+   reveal:credential=>revealLocalModelKey(api.store.get().account.email,credential),
+  }),
+ },
+});
 const modelConnection=settings=>model.connection||settings.model;
 
 const portraits=[['warm-female','暖色女助手'],['cool-female','冷色女助手'],['warm-male','暖色男助手'],['cool-male','冷色男助手']];
@@ -154,7 +168,7 @@ export function syncAssistantSession(ui, state) {
  cancelPendingChange(retainedChat);
  retainedChat=newChat();
  Object.assign(ui,{chat:null,dialog:null,settingsOrigin:null,idea:null,assistantDraft:null,modelKey:'',modelValidated:false,modelChoices:[],modelChoice:''});
- void model.disconnect();
+ model.resetSession();
  return true;
 }
 
@@ -241,7 +255,7 @@ export async function settingsAction(action,h,event) {
   case 'auto-backup':api.store.update(data=>{data.settings.autoBackup=event.target.checked;});return;
   case 'logout':confirmation('退出登录？','可再次使用当前账号登录。',async()=>{
    await auth.logout();
-   await model.disconnect();
+   model.resetSession();
    Object.assign(ui,{modelKey:'',modelValidated:false,modelChoices:[],modelChoice:''});
    Object.assign(ui,{dialog:null,section:'',chat:null,authMode:'login',authMessage:'',authChallenge:false});
    cancelPendingChange(retainedChat);
@@ -275,7 +289,7 @@ export async function settingsAction(action,h,event) {
    }
    return;
   case 'search-toggle':
-   model.setSearch(event.target.checked);
+   await model.setSearch(event.target.checked);
    return;
   case 'thinking-toggle':api.store.update(data=>{data.settings.model.thinking=event.target.checked;});return;
   case 'assistant-style':syncAssistant(ui);ui.assistantDraft.style=value;render();return;
@@ -374,7 +388,20 @@ export function bindVoice(h) {
  const {ui,render,notify}=h;
  let press;
  let blockClick=false;
- document.addEventListener('click',event=>{if(blockClick&&event.target.closest('.assistant-launcher,.chat-input,.voice-button,[data-action="idea-new"]')){event.stopPropagation();event.preventDefault();blockClick=false;}},true);
+ const voiceTarget='.assistant-launcher,.chat-input,.voice-button,[data-action="idea-new"]';
+ const keyboardFallback='可以点进输入框，用手机键盘的语音键输入。';
+ const voiceErrors={
+  'not-allowed':'浏览器未授权语音输入，请检查此网站的麦克风权限。',
+  'audio-capture':'浏览器无法打开麦克风，请检查设备权限或是否被其他应用占用。',
+  'network':'浏览器的语音转写服务连接失败。',
+  'service-not-allowed':'此浏览器的语音转写服务不可用。',
+  'language-not-supported':'此浏览器的转写服务不支持中文。',
+  'no-speech':'没有听到声音，请按住说话后再松手。',
+ };
+ document.addEventListener('click',event=>{if(blockClick&&event.target.closest(voiceTarget)){event.stopPropagation();event.preventDefault();blockClick=false;}},true);
+ document.addEventListener('contextmenu',event=>{
+  if(press&&event.target.closest(voiceTarget)===press.node)event.preventDefault();
+ });
  const cancelRecording=gesture=>{
   gesture.canceled=true;
   gesture.overlay?.remove();
@@ -394,24 +421,29 @@ export function bindVoice(h) {
   }
  };
  document.addEventListener('pointerdown',event=>{
-  const node=event.target.closest('.assistant-launcher,.chat-input,.voice-button,[data-action="idea-new"]');
+  const node=event.target.closest(voiceTarget);
   if(!node||event.button!==0||press)return;
-  if(node.matches('.assistant-launcher'))node.setPointerCapture(event.pointerId);
+  if(node.matches('.assistant-launcher,.voice-button,[data-action="idea-new"]'))node.setPointerCapture(event.pointerId);
   const gesture={id:event.pointerId,x:event.clientX,y:event.clientY,node,owner:assistantOwner};
   press=gesture;
   gesture.timer=setTimeout(()=>{
    if(press!==gesture||gesture.dragged)return;
    blockClick=true;
    const Speech=globalThis.SpeechRecognition||globalThis.webkitSpeechRecognition;
-   if(!Speech){notify('当前浏览器未提供语音转写，请使用文字输入。');return;}
+   if(!Speech){notify('当前浏览器未提供语音转写。'+keyboardFallback);return;}
    const recognizer=new Speech();gesture.recognizer=recognizer;recognizer.lang='zh-CN';
+   recognizer.onstart=()=>{
+    if(gesture.released&&!gesture.canceled){try{recognizer.stop();}catch{}}
+   };
    recognizer.onresult=result=>{
     gesture.transcript=[...result.results].map(item=>item[0].transcript).join('');
     submitRecording(gesture);
    };
-   recognizer.onerror=()=>{
+   recognizer.onerror=event=>{
     gesture.overlay?.remove();
-    if(!gesture.canceled)notify('语音转写未完成，请检查麦克风权限或使用文字。');
+    if(gesture.canceled||gesture.owner!==assistantOwner)return;
+    gesture.canceled=true;
+    notify((voiceErrors[event.error]||'浏览器未能完成语音转写。')+keyboardFallback);
    };
    recognizer.onend=()=>{gesture.overlay?.remove();};
    try{
