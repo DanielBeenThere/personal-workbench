@@ -1,6 +1,6 @@
 import {api,cloudWorkspace,assignees as people} from './domain.js';
 import {dueReminders,markRemindersRead} from './task-reminders.js';
-import {authView, settingsView, ideaView, chatView, searchResults, settingsAction, bindVoice, syncAssistantSession, closeAssistantChat} from './settings.js';
+import {authView, settingsView, ideaView, chatView, searchResults, settingsAction, bindVoice, syncAssistantSession, closeAssistantChat} from './settings.js?v=ff2065c';
 
 const app = document.querySelector('#app');
 const state = () => api.store.get();
