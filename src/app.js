@@ -1,6 +1,7 @@
 import {api,cloudWorkspace,assignees as people} from './domain.js';
 import {dueReminders,markRemindersRead} from './task-reminders.js';
-import {authView, settingsView, ideaView, chatView, searchResults, settingsAction, bindVoice, syncAssistantSession, closeAssistantChat} from './settings.js?v=ff2065c';
+import {searchWorkspace} from './workspace-search.js';
+import {authView, settingsView, ideaView, chatView, searchResults, settingsAction, bindVoice, syncAssistantSession, closeAssistantChat} from './settings.js?v=workspace-search-v4';
 
 const app = document.querySelector('#app');
 // iPadOS can report a Mac platform when requesting the desktop site.
@@ -17,10 +18,11 @@ const customAssignee = '其他／自定义';
 const ui = {
   page:'today', section:'', themeId:null, mobileTree:false, sidebar:false, collapsed:false, defaultTheme:false,
   editingThemes:false, expanded:new Set(), dialog:null, doneTab:'details', historyDays:14, chartDays:11,
-  toast:'', chat:null, authMode:'login', authMessage:'', captcha:'', authChallenge:false
+  toast:'', chat:null, authMode:'login', authMessage:'', captcha:'', authChallenge:false,
+  workspaceQuery:'', searchOrigin:null, searchTheme:false
 };
 const esc = (value='') => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-const icon = name => ({menu:'<span class="menu-lines" aria-hidden="true"></span>',chevron:'<span class="chevron" aria-hidden="true"></span>',star:'<span class="star" aria-hidden="true">★</span>'}[name] || '');
+const icon = name => ({menu:'<span class="menu-lines" aria-hidden="true"></span>',chevron:'<span class="chevron" aria-hidden="true"></span>',star:'<span class="star" aria-hidden="true">★</span>',search:'<span class="search-icon" aria-hidden="true"></span>'}[name] || '');
 const button = (text,action,cls='',attributes='') => `<button type="button" class="button ${cls}" data-action="${action}" ${attributes}>${text}</button>`;
 const primary = text => `<button class="button primary" type="submit">${text}</button>`;
 const field = (label,name,value='',type='text',attrs='') => `<label class="field"><span>${label}</span><input name="${name}" type="${type}" value="${esc(value)}" ${attrs}></label>`;
@@ -42,7 +44,7 @@ const helpers = {ui,state,api,esc,button,primary,field,area,select,option,checkb
 
 function navBar(mobile=false) {
   const items=mobile?nav.slice(0,3):nav;
-  const current=mobile&&ui.page==='done'?'themes':ui.page;
+  const current=((mobile&&ui.page==='done')||ui.page==='search')?'themes':ui.page;
   return `<nav class="tabs main-tabs" aria-label="待办板块">${items.map(([name,label])=>button(label,'navigate',current===name?'selected':'',`data-value="${name}" ${current===name?'aria-current="page"':''}`)).join('')}</nav>`;
 }
 
@@ -80,7 +82,7 @@ function today() {
 function themeList() {
   const {groups,themes}=state();
   const data=[...groups,{id:'',name:'未分组'}];
-  return `<section class="theme-list card"><header><h2>战略主题</h2><div>${button('编辑分组','groups')}${button('编辑主题','theme-mode',ui.editingThemes?'selected':'')}</div></header>
+  return `<section class="theme-list card"><header><h2>战略主题</h2><div class="theme-actions">${button('编辑分组','groups')}${button('编辑主题','theme-mode',ui.editingThemes?'selected':'')}${button(icon('search'),'workspace-search','icon-button workspace-search-button','aria-label="搜索工作台" title="搜索"')}</div></header>
   ${data.map(group=>{
     const items=themes.filter(theme=>theme.status!=='已完成'&&(theme.groupId||'')===group.id);
     return items.length?`<section class="topic-group"><h3>${esc(group.name)}</h3><div>${items.map(theme=>{
@@ -101,7 +103,33 @@ function taskTree() {
 }
 
 function themes() {
-  return `${toolbar(ui.mobileTree?esc(state().themes.find(t=>t.id===ui.themeId)?.name||'未归类项目'):'战略主题',ui.mobileTree?'战略主题':'')}<div class="theme-layout ${ui.mobileTree?'show-tree':''}">${themeList()}${taskTree()}</div>`;
+  return `${toolbar(ui.mobileTree?esc(state().themes.find(t=>t.id===ui.themeId)?.name||'未归类项目'):'战略主题',ui.mobileTree?(ui.searchTheme?'返回搜索':'战略主题'):'')}<div class="theme-layout ${ui.mobileTree?'show-tree':''}">${themeList()}${taskTree()}</div>`;
+}
+
+function workspaceResults(data) {
+  if(!ui.workspaceQuery.trim())return empty('输入关键词搜索战略主题、任务或灵感。');
+  const groups=searchWorkspace(data,ui.workspaceQuery);
+  if(!groups.length)return empty('没有找到相关结果。');
+  const highlighted=parts=>parts.map((part,i)=>i%2?`<mark>${esc(part)}</mark>`:esc(part)).join('');
+  return groups.map(({label,results})=>`<section class="workspace-result-group"><h2>${label}</h2>${results.map(result=>
+    button(`<span class="workspace-result-copy"><strong>${highlighted(result.title)}</strong>${result.path?`<small>${esc(result.path)}</small>`:''}${result.snippet?`<small>${highlighted(result.snippet)}</small>`:''}</span>${icon('chevron')}`,
+      result.action,'workspace-result',`data-id="${esc(result.id)}"`)).join('')}</section>`).join('');
+}
+
+function workspaceSearch(data) {
+  return `${toolbar('搜索','返回')}<section class="workspace-search">
+    <div class="workspace-search-controls" role="search"><div class="workspace-search-field">${icon('search')}
+    <input class="workspace-search-input" type="search" aria-label="搜索关键词" placeholder="搜索主题、任务或灵感" value="${esc(ui.workspaceQuery)}">
+    ${button('×','workspace-search-clear','icon-button text-button','aria-label="清空关键词"')}</div></div>
+    <div class="workspace-search-results">${workspaceResults(data)}</div></section>`;
+}
+
+function openTheme(id) {
+  ui.themeId=id||null;
+  ui.mobileTree=true;
+  const first=state().tasks.find(task=>!task.parentId&&(task.themeId||null)===ui.themeId);
+  if(first)ui.expanded.add(first.id);
+  render();
 }
 
 function history() {
@@ -265,7 +293,7 @@ function viewKey() {
  if(ui.page==='themes'&&ui.mobileTree&&!matchMedia('(min-width:1024px)').matches){
   return 'theme:'+(ui.themeId||'uncategorized');
  }
- if(ui.page==='ideas'&&ui.idea)return 'idea:'+(ui.idea.id||'new');
+ if((ui.page==='ideas'||ui.page==='search')&&ui.idea)return ui.page+':idea:'+(ui.idea.id||'new');
  if(ui.page==='done')return 'done:'+ui.doneTab;
  return ui.page;
 }
@@ -352,6 +380,7 @@ function render(origin) {
   }
   const previousScroll=app.querySelector('.chat:not([inert]) .chat-scroll');
   const activeInput=document.activeElement?.matches('.chat-input')?document.activeElement:null;
+  const activeSearch=document.activeElement?.matches('.workspace-search-input')?document.activeElement:null;
   const scrollPosition=previousScroll?.scrollTop||0;
   const following=previousScroll ? previousScroll.scrollHeight-previousScroll.clientHeight-scrollPosition<=36 : true;
   lastRenderedRevision=data.revision;
@@ -360,6 +389,8 @@ function render(origin) {
     viewPositions.clear();
     renderedView=undefined;
     ui.settingsOrigin=null;
+    Object.assign(ui,{workspaceQuery:'',searchOrigin:null,searchTheme:false});
+    if(ui.page==='search')ui.page='today';
     ui.defaultTheme=false;
     app.innerHTML=cloudWorkspace?.getStatus()==='正在恢复登录…'
       ? '<main class="auth" data-cloud-restoring><p role="status">正在恢复登录…</p></main>'
@@ -375,9 +406,10 @@ function render(origin) {
   const section=ui.section;
   const settingsMode=Boolean(section&&section!=='groups');
   const background=ui.dialog?.completing?ui.dialog.parent:ui.dialog?.background;
-  const showBack=!ui.dialog&&(section||ui.page==='done'||(ui.page==='ideas'&&ui.idea)||(ui.page==='themes'&&(ui.mobileTree||ui.editingThemes)));
+  const showBack=!ui.dialog&&(section||ui.page==='done'||((ui.page==='ideas'||ui.page==='search')&&ui.idea)||(ui.page==='themes'&&(ui.mobileTree||ui.editingThemes)));
   const body=section==='groups'?`${toolbar('编辑分组','战略主题')}${groupList()}` : section ? settingsView(helpers) :
-    ui.page==='themes'?themes() : ui.page==='ideas'?ideaView(helpers) : ui.page==='done'?history():today();
+    ui.page==='themes'?themes() : ui.page==='search'?(ui.idea?ideaView(helpers):workspaceSearch(data)) :
+    ui.page==='ideas'?ideaView(helpers) : ui.page==='done'?history():today();
   app.innerHTML=`<div class="workspace ${ui.collapsed?'collapsed':''}">${sidebar()}<main><header class="desktop-header">${sidebarButton('',ui.collapsed?'展开侧栏':'收起侧栏')}`+
     `<strong>待办清单</strong>${navBar()}</header><div class="page"${settingsMode?' data-secondary':''}>${cloudStatusNotice()}${body}</div>${settingsMode?'':`<div class="mobile-nav">${navBar(true)}</div>`}</main>
   ${button(avatar(data.settings.assistant.avatar)+`<span class="assistant-unread" aria-hidden="true" ${dueReminders(data).some(item=>item.unread)?'':'hidden'}></span>`,'chat-toggle','assistant-launcher',`aria-label="小助手" aria-description="${dueReminders(data).some(item=>item.unread)?'有未读任务提醒':''}" aria-haspopup="dialog" aria-expanded="${Boolean(ui.chat)}" ${ui.chat?'aria-controls="assistant-dialog"':''}`)}${ui.chat?chatView(helpers):''}${dialogHTML(background,true)}${dialogHTML(ui.dialog)}
@@ -422,6 +454,11 @@ function render(origin) {
       if(chatInput.value===activeInput.value)chatInput.setSelectionRange(activeInput.selectionStart,activeInput.selectionEnd);
     }else if(ui.chat&&!previousScroll)app.querySelector('.chat')?.focus({preventScroll:true});
     else if(!ui.chat&&previousScroll)app.querySelector('.assistant-launcher')?.focus({preventScroll:true});
+    else if(activeSearch){
+      const input=app.querySelector('.workspace-search-input');
+      input?.focus({preventScroll:true});
+      if(input?.value===activeSearch.value)input.setSelectionRange(activeSearch.selectionStart,activeSearch.selectionEnd);
+    }
   }
   if(motionEnabled()){
     const workspace=app.querySelector('.workspace');
@@ -461,7 +498,8 @@ function navigate(value) {
  if(value==='done'&&ui.page!=='done'){
   ui.completedOrigin={page:ui.page,themeId:ui.themeId,mobileTree:ui.mobileTree,editingThemes:ui.editingThemes};
  }else if(value!=='done')ui.completedOrigin=null;
- Object.assign(ui,{page:value,section:'',mobileTree:false,editingThemes:false,dialog:null,sidebar:false,settingsOrigin:null});
+ if(ui.page==='search')ui.idea=null;
+ Object.assign(ui,{page:value,section:'',mobileTree:false,editingThemes:false,dialog:null,sidebar:false,settingsOrigin:null,searchOrigin:null,searchTheme:false});
  render();
 }
 function openSettings(){
@@ -500,6 +538,16 @@ function goBack() {
  }else if(ui.section==='settings'){returnFromSettings();return;}
  else if(ui.section){
   ui.section=ui.section==='assistant-avatars'?'personalization':['nickname','password','avatar','model','personalization'].includes(ui.section)?'settings':'';
+ }else if(ui.page==='search'){
+  if(ui.idea)ui.idea=null;
+  else {
+   Object.assign(ui,ui.searchOrigin,{page:'themes',searchOrigin:null});
+   render();
+   app.querySelector('[data-action="workspace-search"]')?.focus({preventScroll:true});
+   return;
+  }
+ }else if(ui.searchTheme){
+  Object.assign(ui,{page:'search',mobileTree:false,searchTheme:false});
  }else if(ui.page==='ideas')ui.idea=null;
  else if(ui.page==='done'){
   Object.assign(ui,ui.completedOrigin||{page:'themes',mobileTree:false});
@@ -585,7 +633,27 @@ app.addEventListener('click',async event=>{
   }
   if(action==='settings'){openSettings();return;}
   if(action==='back'){goBack();return;}
-  if(action==='open-theme'){ui.themeId=id||null;ui.mobileTree=true;const first=state().tasks.find(t=>!t.parentId&&(t.themeId||null)===ui.themeId);if(first)ui.expanded.add(first.id);render();return;}
+  if(action==='workspace-search'){
+   ui.searchOrigin={themeId:ui.themeId,mobileTree:ui.mobileTree,editingThemes:ui.editingThemes};
+   Object.assign(ui,{page:'search',workspaceQuery:'',searchTheme:false,idea:null});
+   render();
+   app.querySelector('.workspace-search-input')?.focus({preventScroll:true});
+   return;
+  }
+  if(action==='workspace-search-clear'){
+   const input=app.querySelector('.workspace-search-input');
+   input.value='';
+   input.dispatchEvent(new Event('input',{bubbles:true}));
+   input.focus({preventScroll:true});
+   return;
+  }
+  if(action==='search-theme'){
+   if(!state().themes.some(theme=>theme.id===id)){render();return;}
+   Object.assign(ui,{page:'themes',searchTheme:true,editingThemes:false});
+   openTheme(id);
+   return;
+  }
+  if(action==='open-theme'){openTheme(id);return;}
   if(action==='expand'){ui.expanded.has(id)?ui.expanded.delete(id):ui.expanded.add(id);render();return;}
   if(action==='edit-task'){openTask(id);return;}
   if(action==='new-task'){openTask(null,parent||null);return;}
@@ -659,6 +727,10 @@ app.addEventListener('change',async event=>{
  if(input.matches('[data-onchange]'))settingsAction(input.dataset.onchange,helpers,event).catch(error=>notify(error.message));
 });
 app.addEventListener('input',event=>{
+ if(event.target.matches('.workspace-search-input')){
+  ui.workspaceQuery=event.target.value;
+  app.querySelector('.workspace-search-results').innerHTML=workspaceResults(state());
+ }
  if(event.target.matches('.chat-input')){resizeChatInput(event.target);ui.chat.draft=event.target.value;}
  if(event.target.matches('.chat-search-input')&&ui.chat?.searchOpen){
   ui.chat.searchQuery=event.target.value;

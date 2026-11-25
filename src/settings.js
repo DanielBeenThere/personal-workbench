@@ -115,7 +115,7 @@ export function settingsView(h) {
 export function ideaView(h) {
  const {ui,state,toolbar,field,area,primary,button,esc,empty}=h;
  const idea=ui.idea;
- if(idea)return `${toolbar('记下灵感','灵感池')}<form class="editor idea-editor" data-form="idea">
+ if(idea)return `${toolbar('记下灵感',ui.page==='search'?'返回搜索':'灵感池')}<form class="editor idea-editor" data-form="idea">
  ${field('标题（可选）','title',idea.title,'text','placeholder="留空时保存后自动提炼"')}${area('正文','body',idea.body,`rows="8" placeholder="记下你的灵感" ${idea.id?'':'required'}`)}
  ${button('按住说话','idea-voice','voice-button')}<p class="muted centered">追加到正文，可手动修改</p>${primary('确认保存')}
  ${idea.id?`<div class="button-row">${button('删除灵感','idea-delete','danger')}${button('转为正式任务','idea-convert')}</div>`:''}</form>`;
