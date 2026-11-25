@@ -120,6 +120,17 @@ function synchronizeParent(state, id) {
   }
 }
 
+function removeTask(state, id) {
+  const removed = get(state.tasks, id);
+  state.tasks = state.tasks.filter((item) => item.id !== id);
+  for (const task of state.tasks) {
+    if (task.parentId === id) task.parentId = null;
+    task.prerequisites = (task.prerequisites || []).filter((key) => key !== id);
+  }
+  revokeCompletion(state, id);
+  if (removed?.parentId) synchronizeParent(state, removed.parentId);
+}
+
 function summarize(text) {
   return text.trim().split(/[。！？\n]/)[0].slice(0, 42);
 }
@@ -295,16 +306,14 @@ export function createApi({ storage = globalThis.localStorage, key = storageKey,
     store, createRemoteAdapters,
     tasks: {
       save: (task, options) => saveTask(store, task, options),
-      remove(id) {
+      remove: (id) => store.update((state) => removeTask(state, id)),
+      convertToIdea(id, { title, description }) {
         return store.update((state) => {
-          const removed = get(state.tasks, id);
-          state.tasks = state.tasks.filter((item) => item.id !== id);
-          for (const task of state.tasks) {
-            if (task.parentId === id) task.parentId = null;
-            task.prerequisites = (task.prerequisites || []).filter((key) => key !== id);
-          }
-          revokeCompletion(state, id);
-          if (removed?.parentId) synchronizeParent(state, removed.parentId);
+          if (!get(state.tasks, id)) throw new Error("找不到要归入灵感池的任务。");
+          const idea = { id: identifier(), title: nameRequired(title, "任务名称"), body: description ?? "" };
+          state.ideas.unshift(idea);
+          removeTask(state, id);
+          return idea;
         });
       },
       recommend: () => recommend(store.get()),

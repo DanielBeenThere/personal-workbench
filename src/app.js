@@ -4,7 +4,8 @@ import {authView, settingsView, ideaView, chatView, settingsAction, bindVoice} f
 const app = document.querySelector('#app');
 const state = () => api.store.get();
 const makeId = () => crypto.randomUUID();
-const nav = [['today','今日重点'],['themes','任务清单'],['ideas','灵感池'],['done','已完成']];
+const completedPageLabel = '已完成项目';
+const nav = [['today','今日重点'],['themes','任务清单'],['ideas','灵感池'],['done',completedPageLabel]];
 const statuses = ['未开始','进行中','等待中','逾期','已完成'];
 const customAssignee = '其他／自定义';
 const ui = {
@@ -53,9 +54,13 @@ function sidebar() {
 function taskItem(task,asPriority=false) {
   const children=state().tasks.filter(item=>item.parentId===task.id&&item.status!=='已完成');
   const status=task.status==='等待中'?'waiting':task.status==='逾期'?'overdue':'';
+  const summary=String(task.guidance?.summary??'').trim();
+  const prompt=String(task.guidance?.prompt??'').trim();
   return `<article class="task-card ${task.priority?'priority':''} ${asPriority?'today-card':''}">
    <div class="task-copy"><h3>${!task.parentId&&!asPriority?button(icon('chevron'),'expand',`icon-button disclosure ${ui.expanded.has(task.id)?'expanded':''}`,`data-id="${esc(task.id)}" aria-expanded="${ui.expanded.has(task.id)}" aria-label="展开或折叠任务"`):''}${task.priority?icon('star'):''}${esc(task.title)}</h3>
-   <p>${asPriority?esc(task.description||state().themes.find(t=>t.id===task.themeId)?.name||'未归类'):`${task.parentId?'二级任务 · ':''}<span class="${status}">${esc(task.status)}</span>${children.length?' · 由下属任务自动汇总':''}${task.due?' · '+esc(task.due):''}`}</p></div>
+   ${summary?`<p class="task-guidance-title">${esc(summary)}</p>`:''}
+   ${prompt?`<p class="task-guidance-preview">${esc(prompt)}</p>`:''}
+   ${asPriority?'':`<p>${task.parentId?'二级任务 · ':''}<span class="${status}">${esc(task.status)}</span>${children.length?' · 由下属任务自动汇总':''}${task.due?' · '+esc(task.due):''}</p>`}</div>
    ${button(asPriority?'查看任务':'编辑','edit-task',task.priority?'soft':'',`data-id="${esc(task.id)}"`)}
   </article>`;
 }
@@ -76,7 +81,7 @@ function themeList() {
       return `<button class="topic-tile ${theme.priority?'priority':''} ${selected?'topic-selected':''}" data-action="${ui.editingThemes?'edit-theme':'open-theme'}" data-id="${esc(theme.id)}">${theme.priority?icon('star'):''}<span>${esc(theme.name)}</span>${trailing}</button>`;
     }).join('')}</div></section>`:'';
   }).join('')}
-  <div class="theme-footer">${ui.editingThemes?button('新建主题','edit-theme','soft'):`${button('未归类项目','open-theme','','data-id=""')}${button('已完成','navigate','mobile-only','data-value="done"')}`}</div>${ui.editingThemes?editConfirmation('theme-mode'):''}</section>`;
+  <div class="theme-footer">${ui.editingThemes?button('新建主题','edit-theme','soft'):`${button('未归类项目','open-theme','','data-id=""')}${button(completedPageLabel,'navigate','mobile-only','data-value="done"')}`}</div>${ui.editingThemes?editConfirmation('theme-mode'):''}</section>`;
 }
 
 const sorted = list => [...list].sort((a,b)=>(a.due||'9999-12-31').localeCompare(b.due||'9999-12-31'));
@@ -84,7 +89,7 @@ function taskTree() {
   const theme=state().themes.find(item=>item.id===ui.themeId);
   const tasks=state().tasks.filter(item=>(item.themeId||null)===ui.themeId&&item.status!=='已完成');
   return `<section class="task-tree card ${theme?'linked-task-tree':''}"><header><h2>${esc(theme?.name||'未归类项目')}</h2><small>主题内任务</small>${button('新增一级任务','new-task','soft')}</header>
-  ${sorted(tasks.filter(task=>!task.parentId)).map(task=>`<section class="tree-family">${taskItem(task)}${ui.expanded.has(task.id)?`<div class="tree-children">${sorted(tasks.filter(item=>item.parentId===task.id)).map(item=>taskItem(item)).join('')}${button('新增二级任务','new-task','',`data-parent="${esc(task.id)}"`)}</div>`:''}</section>`).join('')||empty('这个主题还没有任务。')}${button('已完成','navigate','mobile-only','data-value="done"')}</section>`;
+  ${sorted(tasks.filter(task=>!task.parentId)).map(task=>`<section class="tree-family">${taskItem(task)}${ui.expanded.has(task.id)?`<div class="tree-children">${sorted(tasks.filter(item=>item.parentId===task.id)).map(item=>taskItem(item)).join('')}${button('新增二级任务','new-task','',`data-parent="${esc(task.id)}"`)}</div>`:''}</section>`).join('')||empty('这个主题还没有任务。')}${button(completedPageLabel,'navigate','mobile-only','data-value="done"')}</section>`;
 }
 
 function themes() {
@@ -114,7 +119,7 @@ function history() {
     const monthStart=index>0&&d.getDate()===new Date(d.getFullYear(),d.getMonth()+1,0).getDate();
     return `${monthStart?`<h3 class="chart-month">${d.getFullYear()} 年 ${d.getMonth()+1} 月</h3>`:''}<div class="chart-row" style="--tick-length:${tickStep/scale*100}%"><time datetime="${key}">${key.slice(5).replace('-','/')}</time><div class="bar" role="img" aria-label="主题 ${counts[0]}，一级任务 ${counts[1]}，二级任务 ${counts[2]}，合计 ${items.length}">${['theme','root','child'].map((type,j)=>`<i class="${type}" style="width:${counts[j]/scale*100}%"></i>`).join('')}<span class="bar-total" aria-hidden="true">${items.length}</span></div></div>`;
   }).join('');
-  return `${toolbar('已完成','战略主题')}<section class="history"><div class="tabs">${button('明细','history-tab',ui.doneTab==='details'?'selected':'','data-value="details"')}${button('统计','history-tab',ui.doneTab==='chart'?'selected':'','data-value="chart"')}</div>
+  return `${toolbar(completedPageLabel,'战略主题')}<section class="history"><div class="tabs">${button('明细','history-tab',ui.doneTab==='details'?'selected':'','data-value="details"')}${button('统计','history-tab',ui.doneTab==='chart'?'selected':'','data-value="chart"')}</div>
   ${ui.doneTab==='details'?details||empty('暂无已完成任务。'):`<h3 class="chart-month">${latest.getMonth()+1} 月</h3><div class="legend"><span>战略主题</span><span>一级任务</span><span>二级任务</span></div><div class="history-chart">${chart}<div class="chart-row"><span></span><div class="chart-ticks">${ticks}</div></div><div class="chart-axis">完成数量（项）</div></div>`}
   ${(ui.doneTab==='chart' ? oldest&&iso(new Date(latest.getFullYear(),latest.getMonth(),latest.getDate()-ui.chartDays+1))>oldest : days.length>ui.historyDays)
     ?button('加载更多','history-more','soft'):''}</section>`;
@@ -144,23 +149,19 @@ function taskForm(task) {
   const assignee=assignedToPreset?task.assignee:task.assignee?customAssignee:'本人';
   const showCustomAssignee=assignee===customAssignee;
   return `<form data-form="task" class="editor">
-  ${field('名称','title',task.title,'text','required')}${area('任务描述（可选）','description',task.description,'rows="3"')}
+  ${field('任务名称','title',task.title,'text','required')}
+  ${checkbox('标为重点任务','priority',task.priority)}
+  ${area('任务描述（可选）','description',task.description,'rows="3"')}
+  ${dateField(task.due)}
   ${taskSelect('所属主题','themeId',themes.find(t=>t.id===(task.themeId||''))?.name||'未归类',themes.map(t=>option(t.id,t.name,task.themeId||'')).join(''))}
   ${taskSelect('上级任务','parentId',parents.find(t=>t.id===task.parentId)?.title||'无上级 · 作为一级任务',option('','无上级 · 作为一级任务',task.parentId||'')+parents.map(t=>option(t.id,t.title,task.parentId)).join(''))}
-  ${dateField(task.due)}
   ${taskSelect('前置任务','prerequisites',data.tasks.find(t=>selectedPrerequisites.has(t.id))?.title||'关联前置任务',option('','关联前置任务',[...selectedPrerequisites][0]||'')+themes.map(theme=>`<optgroup label="${esc(theme.name)}">${data.tasks.filter(t=>(t.themeId||'')===theme.id).flatMap(t=>t.parentId?[]:[t,...data.tasks.filter(c=>c.parentId===t.id)]).filter(t=>t.id!==task.id).map(t=>option(t.id,(t.parentId?'　':'')+t.title,[...selectedPrerequisites][0],wouldCycle(t.id))).join('')}</optgroup>`).join(''))}
-  ${checkbox('标为重点任务','priority',task.priority)}
-  ${wheel('交给谁来做','assignee',people,assignee)}
+  ${taskSelect('交给谁来做','assignee',assignee,people.map(value=>option(value,value,assignee)).join(''))}
   <div data-custom-assignee ${showCustomAssignee?'':'hidden'}>${field('自定义执行人','assigneeCustom',assignedToPreset?'':task.assignee,'text',`placeholder="输入执行人姓名" ${showCustomAssignee?'':'disabled'}`)}</div>
-  ${wheel('进度','status',statuses,task.status||'未开始')}
+  ${taskSelect('进度','status',task.status||'未开始',statuses.map(value=>option(value,value,task.status||'未开始')).join(''))}
   <section><header class="row-head"><h2>任务进展</h2>${button('新增任务进展','progress','soft')}</header>${updateRows?`<ul class="timeline">${updateRows}</ul>`:empty('暂无进展')}</section>
   <section><h2>下一步指导</h2><div class="guidance"><strong>${esc(guidance.summary)}</strong><p>${esc(guidance.prompt)}</p>${(guidance.references||[]).map(ref=>referenceLink(ref)).join('')}${button('编辑 Prompt 和参考资料','guidance')}</div></section>
-  <footer class="form-footer">${task.id?button('删除任务','delete-task','danger'):''}${button('取消','close-dialog')}${primary('保存修改')}</footer></form>`;
-}
-
-function wheel(label,name,choices,selected) {
-  const id='wheel-'+name, index=Math.max(0,choices.indexOf(selected));
-  return `<div class="field wheel"><label for="${id}">${label}</label><div class="wheel-control"><select id="${id}" class="wheel-select" name="${name}">${choices.map(value=>option(value,value,selected)).join('')}</select><div class="wheel-face" aria-hidden="true"><small>${esc(choices[index-1]||'')}</small><strong>${esc(choices[index])}<b>⌃<br>⌄</b></strong><small>${esc(choices[index+1]||'')}</small></div></div></div>`;
+  <footer class="form-footer">${task.id?button('删除任务','delete-task','danger')+button('归入灵感池','task-to-idea','soft'):''}${button('取消','close-dialog')}${primary('保存修改')}</footer></form>`;
 }
 
 function themeForm(theme) {
@@ -174,17 +175,22 @@ function groupList() {
 function dialogHTML(d,underlay=false) {
   if(!d)return '';
   let title, content, extra='';
+  const converting=d.kind==='confirm'&&Number.isInteger(d.promotedCount);
   if(d.kind==='task'){title='编辑任务';content=taskForm(d.item);extra='task-dialog';}
   if(d.kind==='theme'){title=d.item.id?'修改主题':'新建主题';content=themeForm(d.item);extra='task-dialog';}
   if(d.kind==='group'){title=d.item.id?'编辑分组':'新建分组';content=`<form class="editor" data-form="group">${field('组名','name',d.item.name,'text','required')}<footer class="form-footer">${d.item.id?button('删除分组','delete-group','danger'):''}${button('取消','close-dialog')}${primary('保存')}</footer></form>`;}
   if(d.kind==='progress'){title='新增任务进展';content=`<form class="editor" data-form="progress">${area('输入这次进展','body','','rows="7" required')}${primary('确认添加')}</form>`;extra='task-dialog';}
   if(d.kind==='guidance'){title='下一步指导';const g=d.parent.item.guidance||{};content=`<form class="editor" data-form="guidance"><div class="summary-field">${field('摘要（可选）','summary',g.summary)}<p class="muted">留空时保存后从 Prompt 自动提炼。</p></div>${area('给执行人的 Prompt','prompt',g.prompt,'rows="7"')}<section><header class="row-head"><h2>参考文件和链接</h2>${button('添加文件或链接','reference')}</header><div id="references">${(g.references||[]).map(ref=>referenceRow(ref)).join('')}</div></section><footer>${primary('保存指导')}</footer></form>`;extra='task-dialog';}
-  if(d.kind==='confirm'){title=d.title;content=`<p>${esc(d.description||'')}</p>${completionGroups(d)}<div class="form-footer confirm-footer">${button('取消','close-dialog')}${button(d.completing?'确认完成':'确认','confirm','primary')}</div>`;}
+  if(d.kind==='confirm'){
+    title=d.title;
+    const details=converting?(d.promotedCount?`<div class="reassign"><section><strong>${d.promotedCount} 条未完成子任务将保留并上移一级</strong></section></div>`:''):completionGroups(d);
+    content=`<p>${esc(d.description||'')}</p>${details}<div class="form-footer confirm-footer">${button('取消','close-dialog')}${button(converting?'确认转换':d.completing?'确认完成':'确认','confirm','primary')}</div>`;
+  }
   if(d.kind==='celebration'){content=`<div class="celebration-stage"><div class="celebration-badge" aria-hidden="true"><svg viewBox="0 0 40 40" class="celebration-check"><path pathLength="1" d="M 9,20 L 17,28 L 31,13"></path></svg><i></i>${Array.from({length:8},(_,i)=>`<b style="--index:${i}">✦</b>`).join('')}</div></div><h2 id="dialog-heading" class="celebration-heading">${d.isTheme?'战略主题已完成':'任务已完成'}</h2><p class="completion-title">${esc(d.label)}</p><div class="celebration-actions">${button('返回任务列表','celebration-return','primary full')}${button('查看已完成任务','celebration-done','full')}</div>`;}
   if(d.kind==='model-key'){title='配置 API Key';content=`<form class="editor" data-form="model-key">${field('API Key','key','','password','required autocomplete="off"')}<footer class="form-footer">${button('取消','close-dialog')}${primary('确认')}</footer></form>`;}
-  const mobileBack=extra?button('‹ '+(d.parent?'编辑任务':ui.page==='done'?'已完成':'返回主题'),'close-dialog','text-button page-back task-mobile-tool'):'';
-  const variant=d.kind==='celebration'?' celebration-dialog':d.completing?' completion-confirm':'';
-  const closeButton=d.completing?'':'<button type="button" data-action="close-dialog" class="button icon-button close" aria-label="关闭">×</button>';
+  const mobileBack=extra?button('‹ '+(d.parent?'编辑任务':ui.page==='done'?completedPageLabel:'返回主题'),'close-dialog','text-button page-back task-mobile-tool'):'';
+  const variant=d.kind==='celebration'?' celebration-dialog':d.completing||converting?' completion-confirm':'';
+  const closeButton=d.completing||converting?'':'<button type="button" data-action="close-dialog" class="button icon-button close" aria-label="关闭">×</button>';
   const heading=title?`<h2 ${underlay?'':'id="dialog-heading"'}>${title}</h2>`:'';
   const head=title?`<header>${closeButton}${extra?`<div class="page-heading">${sidebarButton('task-mobile-tool')}${heading}${mobileBack}</div>`:heading}</header>`:'';
   return `<div class="modal-layer ${extra}${variant}${underlay?' dialog-underlay':''}" ${underlay?'inert aria-hidden="true"':'data-action="dismiss-overlay"'}><article class="dialog" ${underlay?'':'tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="dialog-heading"'}>${head}<div class="dialog-body">${content||''}</div>${extra?`<div class="task-mobile-nav">${navBar(true)}</div>`:''}</article></div>`;
@@ -499,6 +505,30 @@ async function saveTheme(theme,confirm=false){
 Object.assign(helpers,{render,navigate,notify,confirmation,openTask,accountAvatar,close});
 const readTaskDraft=()=>{const form=app.querySelector('[data-form="task"]');if(form&&ui.dialog?.kind==='task')applyTaskFields(form);};
 
+function requestTaskConversion(form) {
+ const name=form.elements.title;
+ if(!name.value.trim()){
+  name.setCustomValidity('请填写任务名称');
+  name.reportValidity();
+  name.setCustomValidity('');
+  return;
+ }
+ const {id,title,description}=applyTaskFields(form);
+ const parent=ui.dialog;
+ const promotedCount=state().tasks.filter(item=>item.parentId===id&&item.status!=='已完成').length;
+ ui.dialog={
+  kind:'confirm', title:'将任务转为灵感？', parent, background:parent, promotedCount,
+  description:`「${title.trim()}」的名称和描述将成为灵感的标题和正文。原任务将从任务清单移除。`,
+  run(){
+   api.tasks.convertToIdea(id,{title,description});
+   ui.expanded.delete(id);
+   ui.dialog=null;
+   notify('已归入灵感池');
+  },
+ };
+ render();
+}
+
 app.addEventListener('click',async event=>{
  if(!event.target.closest('.dropdown'))hideOptions();
  const target=event.target.closest('[data-action]');
@@ -538,6 +568,7 @@ app.addEventListener('click',async event=>{
   if(action==='dismiss-overlay'){if(event.target===target)close();return;}
   if(action==='close-dialog'){close();return;}
   if(action==='confirm'){await ui.dialog.run();return;}
+  if(action==='task-to-idea'){requestTaskConversion(target.form);return;}
   if(action==='delete-task'){readTaskDraft();confirmation('删除任务？','确认后移除此任务。',async()=>{await api.tasks.remove(ui.dialog.parent.item.id);ui.dialog=null;render();});return;}
   if(action==='delete-theme'){confirmation('删除主题？','该主题下的任务将移至未归类项目。',async()=>{await api.themes.remove(ui.dialog.parent.item.id);ui.themeId=null;ui.dialog=null;render();});return;}
   if(action==='delete-group'){confirmation('删除分组？','该分组下的主题将移至未分组。',()=>{const gid=ui.dialog.parent.item.id;api.store.update(data=>{data.groups=data.groups.filter(g=>g.id!==gid);data.themes.forEach(t=>{if(t.groupId===gid)t.groupId='';});});ui.dialog=null;render();});return;}
@@ -579,41 +610,13 @@ app.addEventListener('change',async event=>{
   return;
  }
  if(ui.dialog?.kind==='task'&&input.name==='themeId'){applyTaskFields(input.form);render();}
- if(input.matches('.wheel-select')){
-  const face=input.nextElementSibling;
-  face.querySelector('strong').firstChild.nodeValue=input.selectedOptions[0].text;
-  face.firstElementChild.textContent=input.options[input.selectedIndex-1]?.text||'';
-  face.lastElementChild.textContent=input.options[input.selectedIndex+1]?.text||'';
-  if(input.name==='assignee'){
-   const showCustom=input.value===customAssignee;
-   input.form.querySelector('[data-custom-assignee]').hidden=!showCustom;
-   input.form.elements.assigneeCustom.disabled=!showCustom;
-  }
+ if(ui.dialog?.kind==='task'&&input.name==='assignee'){
+  const showCustom=input.value===customAssignee;
+  input.form.querySelector('[data-custom-assignee]').hidden=!showCustom;
+  input.form.elements.assigneeCustom.disabled=!showCustom;
  }
  if(input.matches('[data-onchange]'))settingsAction(input.dataset.onchange,helpers,event).catch(error=>notify(error.message));
 });
-app.addEventListener('wheel',event=>{
- const control=event.target.closest('.wheel-control');
- if(!control||!event.deltaY)return;
- event.preventDefault();
- if(control.dataset.wheeling)return;
- control.dataset.wheeling='true';setTimeout(()=>delete control.dataset.wheeling,125);
- shiftWheel(control.querySelector('select'),Math.sign(event.deltaY));
-},{passive:false});
-let wheelPress;
-app.addEventListener('pointerdown',event=>{
- if(event.target.matches('.wheel-select'))wheelPress={input:event.target,y:event.clientY};
-});
-app.addEventListener('pointerup',event=>{
- if(!wheelPress)return;
- const offset=wheelPress.y-event.clientY;
- if(Math.abs(offset)>18){event.preventDefault();shiftWheel(wheelPress.input,Math.sign(offset));}
- wheelPress=null;
-});
-function shiftWheel(input,direction){
- const i=Math.max(0,Math.min(input.options.length-1,input.selectedIndex+direction));
- input.selectedIndex=i;input.dispatchEvent(new Event('change',{bubbles:true}));
-}
 app.addEventListener('input',event=>{
  if(event.target.matches('.chat-input')){resizeChatInput(event.target);ui.chat.draft=event.target.value;}
 });

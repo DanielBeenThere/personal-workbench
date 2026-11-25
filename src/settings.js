@@ -86,7 +86,7 @@ export function ideaView(h) {
  const {ui,state,toolbar,field,area,primary,button,esc,empty}=h;
  const idea=ui.idea;
  if(idea)return `${toolbar('记下灵感','灵感池')}<form class="editor idea-editor" data-form="idea">
- ${field('标题（可选）','title',idea.title,'text','placeholder="留空时保存后自动提炼"')}${area('正文','body',idea.body,'rows="8" placeholder="记下你的灵感" required')}
+ ${field('标题（可选）','title',idea.title,'text','placeholder="留空时保存后自动提炼"')}${area('正文','body',idea.body,`rows="8" placeholder="记下你的灵感" ${idea.id?'':'required'}`)}
  ${button('按住说话','idea-voice','voice-button')}<p class="muted centered">追加到正文，可手动修改</p>${primary('确认保存')}
  ${idea.id?`<div class="button-row">${button('删除灵感','idea-delete','danger')}${button('转为正式任务','idea-convert')}</div>`:''}</form>`;
  return `${toolbar('灵感池')}<div class="ideas-list">${state().ideas.map(item=>button(`<span><strong>${esc(item.title)}</strong><small>${esc(item.body)}</small></span><b>›</b>`,'idea-open','idea-tile',`data-id="${esc(item.id)}"`)).join('')||empty('暂无灵感。')}</div><div class="idea-dock">${button('记下灵感','idea-new','soft')}<p class="muted">点按输入文字 · 长按直接说话</p></div>`;
@@ -227,6 +227,7 @@ export async function settingsAction(action,h,event) {
   case 'idea-open':ui.idea=structuredClone(state().ideas.find(item=>item.id===id));render();return;
   case 'form:idea':{
    saveIdeaDraft(ui);
+   if(!ui.idea.title.trim()&&!ui.idea.body.trim()){notify('请填写灵感标题或正文。');return;}
    const idea={...ui.idea,id:ui.idea.id||makeId(),title:ui.idea.title.trim()||textTitle(ui.idea.body)};
    api.store.update(data=>{const current=data.ideas.find(item=>item.id===idea.id);if(current)Object.assign(current,idea);else data.ideas.unshift(idea);});
    ui.idea=null;render();return;
