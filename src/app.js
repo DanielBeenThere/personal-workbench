@@ -3,6 +3,11 @@ import {dueReminders,markRemindersRead} from './task-reminders.js';
 import {authView, settingsView, ideaView, chatView, searchResults, settingsAction, bindVoice, syncAssistantSession, closeAssistantChat} from './settings.js?v=ff2065c';
 
 const app = document.querySelector('#app');
+// iPadOS can report a Mac platform when requesting the desktop site.
+const {userAgent,platform,maxTouchPoints}=navigator;
+if(!/Android/i.test(userAgent)&&(/iPhone|iPad|iPod/i.test(userAgent)||(platform==='MacIntel'&&maxTouchPoints>1))){
+ document.documentElement.dataset.appleMobile='true';
+}
 const state = () => api.store.get();
 const makeId = () => crypto.randomUUID();
 const completedPageLabel = '已完成项目';
