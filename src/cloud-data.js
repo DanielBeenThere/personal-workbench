@@ -29,6 +29,13 @@ export function createCloudData(fetcher = globalThis.fetch) {
   }
 
   return {
+    modelRequest(action, token, init) {
+      return fetcher(new URL(`/functions/v1/workbench-deepseek/${action}`, supabaseUrl), {
+        ...init,
+        headers: { ...init.headers, apikey: publishableKey, Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(145000),
+      });
+    },
     signIn(email, password) {
       return authToken("password", { email, password });
     },

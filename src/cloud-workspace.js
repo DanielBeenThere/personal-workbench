@@ -21,6 +21,7 @@ export function createCloudWorkspace(initialState, data = createCloudData()) {
   let writing = false;
   let reading = false;
   let refreshing;
+  let activeFlush;
   let conflict = false;
   let status = "";
   const hasChanges = () => Boolean(pending || inFlight);
@@ -139,7 +140,12 @@ export function createCloudWorkspace(initialState, data = createCloudData()) {
     apply(row, user);
   }
 
-  async function flush() {
+  function flush() {
+    activeFlush ??= Promise.resolve().then(flushPending).finally(() => { activeFlush = null; });
+    return activeFlush;
+  }
+
+  async function flushPending() {
     if (writing || conflict || !hasChanges() || !identity) return;
     writing = true;
     const user = identity;
@@ -195,10 +201,18 @@ export function createCloudWorkspace(initialState, data = createCloudData()) {
   return {
     getStatus: () => status,
     getAccountId: () => identity?.id,
+    async modelRequest(path, init) {
+      const action = /^\/api\/deepseek\/(models|chat|search)$/.exec(path)?.[1];
+      const user = identity;
+      if (!user || !action) throw new Error("工作台会话或模型请求无效。");
+      const accessToken = await token();
+      if (user !== identity) throw new Error("登录账号已变化。");
+      return data.modelRequest(action, accessToken, init);
+    },
     async readForAssistant() {
       const user = identity;
       if (!user) throw new Error("请先登录工作台。");
-      if (hasChanges() && !writing) await flush();
+      if (hasChanges() || writing) await flush();
       if (writing || conflict || hasChanges()) throw new Error("工作台改动尚未同步，请同步完成后再查询。");
       const revision = state.revision;
       const row = await data.load(user.id, await token());

@@ -1,11 +1,11 @@
 import {api,cloudWorkspace} from './domain.js';
-import {createDemoAuth,createDemoModel,demoCredentials} from './integrations.js';
+import {createDemoAuth,demoCredentials} from './integrations.js';
 import {createLocalModel} from './local-model.js';
 import {runWorkspaceTool} from './workspace-tools.js';
 import {memoryMarkdown} from './assistant-memory.js';
 import {dueReminders,markRemindersRead,taskReminderGuidance} from './task-reminders.js';
 const auth=cloudWorkspace?.auth||createDemoAuth(api);
-const model=cloudWorkspace?createDemoModel(api):createLocalModel();
+const model=cloudWorkspace?createLocalModel(cloudWorkspace.modelRequest,{serviceName:'云端模型服务'}):createLocalModel();
 const modelConnection=settings=>model.connection||settings.model;
 
 const portraits=[['warm-female','暖色女助手'],['cool-female','冷色女助手'],['warm-male','暖色男助手'],['cool-male','冷色男助手']];
@@ -69,9 +69,9 @@ export function settingsView(h) {
   const model=connection;
   const choices=ui.modelValidated?ui.modelChoices:(model.models||[]);
   const selected=ui.modelValidated?ui.modelChoice:model.model;
-  const canSearch=cloudWorkspace||model.model==='deepseek-flash';
+  const canSearch=model.model==='deepseek-flash';
   return `${toolbar('小助手与模型','设置')}<div class="editor settings-form">
-  ${select('模型厂商','provider',option('DeepSeek','DeepSeek','DeepSeek'))}<p class="muted">当前连接 · ${model.status==='connected'?'已连接':'未连接'}${cloudWorkspace?'（演示）':''}</p>
+  ${select('模型厂商','provider',option('DeepSeek','DeepSeek','DeepSeek'))}<p class="muted">当前连接 · ${model.status==='connected'?'已连接':'未连接'}</p>
   ${model.maskedKey?`<p class="muted">当前 API Key <code>${esc(model.maskedKey)}</code></p>`:''}
   <div class="button-row">${button('输入密钥','model-key')}${button('测试连接','model-test','soft')}${button('断开连接','model-disconnect')}</div>
   ${ui.modelValidated?`<section class="guidance"><strong>已获取可用模型</strong><p>确认时会发送一条简短测试消息，验证所选模型能对话。</p>${button('确认连接','model-confirm','primary')}</section>`:''}
@@ -154,7 +154,7 @@ export function syncAssistantSession(ui, state) {
  cancelPendingChange(retainedChat);
  retainedChat=newChat();
  Object.assign(ui,{chat:null,dialog:null,settingsOrigin:null,idea:null,assistantDraft:null,modelKey:'',modelValidated:false,modelChoices:[],modelChoice:''});
- if(!cloudWorkspace)void model.disconnect();
+ void model.disconnect();
  return true;
 }
 
@@ -241,7 +241,7 @@ export async function settingsAction(action,h,event) {
   case 'auto-backup':api.store.update(data=>{data.settings.autoBackup=event.target.checked;});return;
   case 'logout':confirmation('退出登录？','可再次使用当前账号登录。',async()=>{
    await auth.logout();
-   if(!cloudWorkspace)await model.disconnect();
+   await model.disconnect();
    Object.assign(ui,{modelKey:'',modelValidated:false,modelChoices:[],modelChoice:''});
    Object.assign(ui,{dialog:null,section:'',chat:null,authMode:'login',authMessage:'',authChallenge:false});
    cancelPendingChange(retainedChat);
@@ -263,20 +263,19 @@ export async function settingsAction(action,h,event) {
    confirmButton.disabled=true;
    try{await model.confirm({testId:ui.modelValidated,model:value,search:state().settings.model.search});}
    finally{confirmButton.disabled=false;}
-   ui.modelKey='';ui.modelValidated=false;ui.modelChoices=[];notify(cloudWorkspace?'模拟连接已确认':'DeepSeek 已连接');return;
+   ui.modelKey='';ui.modelValidated=false;ui.modelChoices=[];notify('DeepSeek 已连接');return;
   }
   case 'model-disconnect':await model.disconnect();ui.modelKey='';ui.modelValidated=false;ui.modelChoices=[];render();return;
   case 'model-choice':
    if(ui.modelValidated)ui.modelChoice=event.target.value;
-   else if(!cloudWorkspace&&model.connection.status==='connected') {
+   else if(model.connection.status==='connected') {
     const select=event.target;
     select.disabled=true;
     try{await model.selectModel(select.value);}finally{render();}
    }
    return;
   case 'search-toggle':
-   if(cloudWorkspace)api.store.update(data=>{data.settings.model.search=event.target.checked;});
-   else model.setSearch(event.target.checked);
+   model.setSearch(event.target.checked);
    return;
   case 'thinking-toggle':api.store.update(data=>{data.settings.model.thinking=event.target.checked;});return;
   case 'assistant-style':syncAssistant(ui);ui.assistantDraft.style=value;render();return;
@@ -341,7 +340,6 @@ async function sendChat(h,text) {
  render();
  try{
   const {settings,account}=state();
-  if(cloudWorkspace)throw new Error('线上助手的模型服务尚未接入。请在本地验收版测试对话。');
   const response=await model.send({
    text:value,transcript:chat.transcript,thinking:settings.model.thinking,isCurrent,
    assistant:chat.trial?ui.assistantDraft:settings.assistant,accountName:account.displayName,
@@ -350,12 +348,15 @@ async function sendChat(h,text) {
     chat.progress=text||(name==='read_workspace'?'正在查询工作台…':name==='change_workspace'?'正在处理工作台操作…':'正在处理…');
     if(ui.chat===chat)render();
    },
-   runTool(name,args){
+   async runTool(name,args){
+    await cloudWorkspace?.readForAssistant();
     if(!isCurrent())throw new Error('会话已关闭或账号已变化。');
-    return runWorkspaceTool(api,name,args,(description,perform)=>new Promise(resolve=>{
+    const result=await runWorkspaceTool(api,name,args,(description,perform)=>new Promise(resolve=>{
      chat.pendingChange={description,perform,owner,resolve};
      if(ui.chat===chat)render();
     }));
+    if(result?.ok!==false&&name!=='read_workspace')await cloudWorkspace?.readForAssistant();
+    return result;
    },
   });
   if(isCurrent())chat.messages.push({role:'assistant',text:response.body,sources:response.sources,at:Date.now()});

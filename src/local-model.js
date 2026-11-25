@@ -7,7 +7,7 @@ const styles = {
   fun: "语气轻松、有趣，优先讲清楚内容。",
 };
 
-export function createLocalModel(fetcher = fetch) {
+export function createLocalModel(fetcher = fetch, { serviceName = "本地模型服务" } = {}) {
   let pending;
   let active;
   let testGeneration = 0;
@@ -21,10 +21,12 @@ export function createLocalModel(fetcher = fetch) {
         body: JSON.stringify(input),
       });
     } catch {
-      throw new Error("本地模型服务无法连接，请检查预览服务。");
+      throw new Error(`${serviceName}无法连接，请检查网络后重试。`);
     }
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || "本地模型服务尚未接通，请使用更新后的预览地址。");
+    if (!response.ok) throw new Error(response.status === 404
+      ? `${serviceName}尚未部署。`
+      : data.error || `${serviceName}暂时无法处理请求。`);
     return data;
   }
 
@@ -47,7 +49,7 @@ export function createLocalModel(fetcher = fetch) {
       pending = null;
       const { models } = await request("models", { apiKey });
       if (generation !== testGeneration) throw new Error("连接设置已变化，请重新测试。");
-      if (!models?.length) throw new Error("本地服务未返回可用模型。");
+      if (!models?.length) throw new Error("模型服务未返回可用模型。");
       const testId = crypto.randomUUID();
       pending = { apiKey, testId, models };
       return { testId, models };

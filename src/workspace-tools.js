@@ -8,32 +8,7 @@ const fields = {
   ideas: ["title", "body"],
 };
 
-const schema = (name, description, properties, required) => ({
-  type: "function", function: { name, description, parameters: { type: "object", properties, required, additionalProperties: false } },
-});
-const string = { type: "string" };
 const entities = Object.keys(fields);
-const recordFields = {
-  title: string, name: string, description: string, body: string,
-  themeId: string, parentId: string, groupId: string, status: string, due: string,
-  remindAt: { type: "string", description: "任务提醒时间，使用带时区偏移的 ISO 时间，如 2026-12-31T09:00:00+08:00。空字符串取消提醒。用户未指定时间时先询问。" }, assignee: string,
-  priority: { type: "boolean" }, prerequisites: { type: "array", items: string },
-  progress: string, guidanceSummary: string, guidancePrompt: string,
-  sourceIdeaId: { type: "string", description: "转为任务时，传入原灵感 ID。成功创建任务时移除原灵感，同时继承缺省名称和正文。" },
-};
-export const workspaceTools = [
-  schema("assistant_memory", "更新当前账号的长期偏好。remember 只保存用户明确提出、会跨对话复用的习惯，发现新偏好与旧项冲突时沿用已有主题覆盖。forget 仅在用户明确要求忘记时调用。实际采用一条旧偏好时可用 used 标记。不要存临时任务、隐私细节或凭据。", {
-    action: { type: "string", enum: ["remember", "forget", "used"] }, topic: string, preference: string, important: { type: "boolean" },
-  }, ["action", "topic"]),
-  schema("read_workspace", "查询当前用户工作台。用 id 查详情，用 query 搜索，用 themeId 查询指定主题下的任务，用 offset 分页。已知主题、任务或灵感名称时用 nameOnly，支持语音转写的近似拼写。唯一匹配可直接使用返回的 ID；有多个候选时结合归属和上下文判断。", {
-    entity: { type: "string", enum: [...entities, "completions"] }, id: string, query: string, themeId: string, offset: { type: "integer", minimum: 0 },
-    nameOnly: { type: "boolean", description: "只按名称定位。没有规范化的精确匹配时，返回相似度至少 80% 的名称。" },
-  }, ["entity"]),
-  schema("change_workspace", "仅按用户明确要求增删改。先查记录取得准确 ID；删除及完结需要用户确认。把任务转为灵感时用 convert_to_idea，确认后转移名称和描述并移除原任务。任务字段为 title,description,themeId,parentId,status,due,assignee,priority,prerequisites；progress 追加进展；guidanceSummary,guidancePrompt 编辑下一步指导。主题字段为 name,groupId,status,priority；分组为 name；灵感为 title,body。用空字符串清除归属关系。", {
-    entity: { type: "string", enum: entities }, action: { type: "string", enum: ["create", "update", "delete", "convert_to_idea"] },
-    id: string, fields: { type: "object", properties: recordFields, additionalProperties: false },
-  }, ["entity", "action"]),
-];
 
 export const hasWorkspaceControl = text =>
   /WORKBENCH_ACTION|<\/?result\b|<[^<>\n]*\bDSML\b|"(?:requested_operations|tool_call_id)"\s*:|"(?:name|tool)"\s*:\s*"(?:read_workspace|change_workspace|assistant_memory)"\s*[,}]/i.test(text);
